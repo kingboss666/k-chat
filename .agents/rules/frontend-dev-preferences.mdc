@@ -1,0 +1,52 @@
+---
+description: Frontend dev preferences for React/Next in this project
+globs: **/*.{ts,tsx,js,jsx}
+alwaysApply: true
+---
+
+# Frontend Development Preferences
+
+## Core Style
+- Use TypeScript-first design: define explicit `type` / `interface` for props, params, and return values where meaningful.
+- Prefer `interface` for object shapes (props, DTOs, structured params); use `type` for unions, intersections, mapped/utility-based aliases, or function signatures.
+- Prefer arrow functions for components, handlers, and local utility functions (`const fn = () => {}`) to keep style consistent.
+- Keep components focused and small; when logic grows, split UI blocks and extract custom hooks.
+- Follow DRY and readability: avoid duplicated render branches and repeated business logic.
+- Prefer early returns to reduce nesting and make component flow obvious.
+
+## React and Naming
+- Prefer functional components and hooks; avoid class components.
+- For arrow-function components, require explicit component type annotation: use `React.FC` or `FC<Props>`.
+- Name event handlers with `handle` prefix, e.g. `handleClick`, `handleKeyDown`, `handleSubmit`.
+- Use clear, semantic names for state, functions, and constants; avoid vague names like `data1`, `temp`.
+- Keep import structure clean: third-party, internal aliases (`@/`), then relative imports.
+
+## Styling and UI
+- Prefer Tailwind utility classes for styling; avoid introducing extra CSS files unless necessary.
+- Keep visual tokens consistent with existing theme utilities and design tokens.
+- Use concise JSX structure and avoid inline style objects unless dynamic styles are required.
+
+## `cn` Usage
+- Use `cn()` for conditional or composable Tailwind class merging; avoid manual string concatenation for class names.
+- Put stable base classes first, then conditional classes, e.g. `cn('base classes', { 'active classes': isActive })`.
+- Prefer object syntax for boolean branches; keep conditions readable and avoid deeply nested ternaries inside `className`.
+- If `className` is static and has no conditions, use plain string instead of wrapping with `cn()`.
+- When forwarding external `className`, merge in this order: `cn('internal base classes', conditionalClasses, className)`.
+
+## Accessibility
+- Interactive non-button elements must be keyboard accessible: `tabIndex={0}`, `role`, and keyboard handlers.
+- Provide meaningful `aria-label` / `alt` text for clickable controls and media.
+- Ensure click interactions have keyboard equivalents where applicable.
+
+## Quality Bar
+- No placeholders or TODO stubs in delivered feature code.
+- Include all required imports and keep code directly runnable.
+- For refactors, preserve behavior while reducing complexity and improving maintainability.
+
+## React Component Definition
+- Components must be defined using arrow functions only.
+- Always declare components with explicit type annotation:
+  const ComponentName: React.FC<Props> = () => {}.
+- If the component does not receive props, omit the generic:
+  const ComponentName: React.FC = () => {}.
+- Do not use function declarations (function ComponentName() {}) for React components.
