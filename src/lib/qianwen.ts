@@ -48,14 +48,25 @@ export interface GenerateQianwenChatCompletionResult {
   latency: number
 }
 
+export type GenerateQianwenChatCompletionStreamEvent
+  = | { type: 'text', content: string }
+    | { type: 'done', result: GenerateQianwenChatCompletionResult }
+
 interface QianwenStreamChunk {
   choices?: Array<{
     delta?: {
       content?: string
+      tool_calls?: Array<{
+        index: number
+        id?: string
+        type?: 'function'
+        function?: {
+          name?: string
+          arguments?: string
+        }
+      }>
     }
-    message?: {
-      content?: string
-    }
+    finish_reason?: 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'function_call' | null
   }>
   usage?: {
     prompt_tokens?: number
@@ -87,6 +98,17 @@ const EMPTY_USAGE: QianwenUsage = {
   prompt: 0,
   completion: 0,
   total: 0,
+}
+
+function createEmptyToolCall(index: number): QianwenToolCall {
+  return {
+    id: `stream-tool-call-${index}`,
+    type: 'function',
+    function: {
+      name: '',
+      arguments: '',
+    },
+  }
 }
 
 function createMockEmbedding(text: string) {
@@ -289,6 +311,161 @@ export async function generateQianwenChatCompletion({
     toolCalls: message?.tool_calls ?? [],
     usage,
     latency: performance.now() - startedAt,
+  }
+}
+
+export async function* generateQianwenChatCompletionStream({
+  messages,
+  tools,
+  temperature = 0.2,
+}: GenerateQianwenChatCompletionParams): AsyncGenerator<GenerateQianwenChatCompletionStreamEvent> {
+  const apiKey = process.env.QIANWEN_API_KEY
+
+  if (!apiKey) {
+    const mockCompletion = createMockQianwenCompletion({ messages, tools, temperature })
+
+    if (mockCompletion.toolCalls.length === 0) {
+      for (const char of mockCompletion.content) {
+        yield { type: 'text', content: char }
+      }
+    }
+
+    yield {
+      type: 'done',
+      result: mockCompletion,
+    }
+    return
+  }
+
+  const startedAt = performance.now()
+  const response = await fetch(QIANWEN_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: QIANWEN_MODEL,
+      messages,
+      tools,
+      tool_choice: tools?.length ? 'auto' : undefined,
+      temperature,
+      stream: true,
+      stream_options: {
+        include_usage: true,
+      },
+    }),
+  })
+
+  if (!response.ok || !response.body) {
+    const errorText = await response.text()
+    throw new Error(`QIANWEN_ERROR: ${response.status} ${errorText}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let content = ''
+  const usage = { ...EMPTY_USAGE }
+  const toolCalls: QianwenToolCall[] = []
+
+  function* handlePayload(payload: string): Generator<GenerateQianwenChatCompletionStreamEvent> {
+    if (!payload || payload === '[DONE]') {
+      return
+    }
+
+    const chunk = JSON.parse(payload) as QianwenStreamChunk
+    const chunkUsage = normalizeQianwenUsage(chunk.usage)
+
+    if (chunkUsage) {
+      usage.prompt = chunkUsage.prompt
+      usage.completion = chunkUsage.completion
+      usage.total = chunkUsage.total
+    }
+
+    for (const choice of chunk.choices ?? []) {
+      const delta = choice.delta
+      const deltaContent = delta?.content ?? ''
+
+      if (deltaContent) {
+        content += deltaContent
+        yield { type: 'text', content: deltaContent }
+      }
+
+      for (const partialToolCall of delta?.tool_calls ?? []) {
+        const targetIndex = partialToolCall.index
+        const existingToolCall = toolCalls[targetIndex] ?? createEmptyToolCall(targetIndex)
+
+        if (partialToolCall.id) {
+          existingToolCall.id = partialToolCall.id
+        }
+
+        if (partialToolCall.type) {
+          existingToolCall.type = partialToolCall.type
+        }
+
+        if (partialToolCall.function?.name) {
+          existingToolCall.function.name += partialToolCall.function.name
+        }
+
+        if (partialToolCall.function?.arguments) {
+          existingToolCall.function.arguments += partialToolCall.function.arguments
+        }
+
+        toolCalls[targetIndex] = existingToolCall
+      }
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      buffer += decoder.decode()
+      break
+    }
+
+    buffer += decoder.decode(value, { stream: true })
+    const frames = buffer.split('\n\n')
+    buffer = frames.pop() ?? ''
+
+    for (const frame of frames) {
+      const dataLines = frame
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.startsWith('data:'))
+        .map(line => line.slice(5).trim())
+
+      for (const dataLine of dataLines) {
+        yield * handlePayload(dataLine)
+      }
+    }
+  }
+
+  const trailingFrames = buffer
+    .split('\n\n')
+    .map(frame => frame.trim())
+    .filter(Boolean)
+
+  for (const frame of trailingFrames) {
+    const dataLines = frame
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.startsWith('data:'))
+      .map(line => line.slice(5).trim())
+
+    for (const dataLine of dataLines) {
+      yield * handlePayload(dataLine)
+    }
+  }
+
+  yield {
+    type: 'done',
+    result: {
+      content,
+      toolCalls: toolCalls.filter(toolCall => toolCall.function.name),
+      usage,
+      latency: performance.now() - startedAt,
+    },
   }
 }
 

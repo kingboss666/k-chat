@@ -5,11 +5,10 @@ import type {
   ChatStreamUsage,
 } from '../chat-types'
 import type { AppendTokenUsageParams } from './useTokenUsage'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useRef } from 'react'
 
 interface SendMessageArgs {
   inputValue: string
-  messages: ChatMessage[]
   canSubmit: boolean
   estimateTokenCount: (text: string) => number
   appendTokenUsageStat: (params: AppendTokenUsageParams) => void
@@ -21,7 +20,6 @@ interface SendMessageArgs {
 
 function useChatStream({
   inputValue,
-  messages,
   canSubmit,
   estimateTokenCount,
   appendTokenUsageStat,
@@ -52,7 +50,14 @@ function useChatStream({
     onMessagesChange(previousMessages => [
       ...previousMessages,
       userMessage,
-      { id: createMessageId(), role: 'assistant', content: '' },
+      {
+        id: createMessageId(),
+        role: 'assistant',
+        content: '',
+        reasoning: '',
+        isThinking: true,
+        isReasoningExpanded: true,
+      },
     ])
     onInputValueChange('')
     onError('')
@@ -62,6 +67,7 @@ function useChatStream({
     let firstTokenAt: number | null = null
     let streamUsage: ChatStreamUsage | null = null
     let assistantContent = ''
+    let reasoning = ''
     const estimatedPromptTokens = estimateTokenCount(userMessage.content)
 
     try {
@@ -116,11 +122,24 @@ function useChatStream({
             }
             assistantContent += event.content
           }
+          if (event.type === 'reasoning' && event.content) {
+            reasoning = event.content
+          }
           if (event.type === 'usage') {
             streamUsage = event.usage
           }
+          if (event.type === 'error') {
+            throw new Error(event.error || '请求失败，请检查服务状态')
+          }
         }
-        catch {
+        catch (error) {
+          if (error instanceof SyntaxError) {
+            return
+          }
+
+          if (error instanceof Error) {
+            throw error
+          }
           // Ignore malformed lines to keep the stream alive.
         }
       }
@@ -134,6 +153,9 @@ function useChatStream({
             nextMessages[lastIndex] = {
               ...nextMessages[lastIndex],
               content: assistantContent,
+              reasoning,
+              isThinking: true,
+              isReasoningExpanded: reasoning ? true : nextMessages[lastIndex].isReasoningExpanded,
             }
           }
 
@@ -161,6 +183,22 @@ function useChatStream({
 
       syncAssistantMessage()
 
+      onMessagesChange((previousMessages) => {
+        const nextMessages = [...previousMessages]
+        const lastIndex = nextMessages.length - 1
+
+        if (lastIndex >= 0 && nextMessages[lastIndex].role === 'assistant') {
+          nextMessages[lastIndex] = {
+            ...nextMessages[lastIndex],
+            reasoning,
+            isThinking: false,
+            isReasoningExpanded: false,
+          }
+        }
+
+        return nextMessages
+      })
+
       appendTokenUsageStat({
         usage: streamUsage,
         requestStartedAt,
@@ -183,6 +221,13 @@ function useChatStream({
             return nextMessages.slice(0, -1)
           }
 
+          nextMessages[lastIndex] = {
+            ...nextMessages[lastIndex],
+            reasoning,
+            isThinking: false,
+            isReasoningExpanded: false,
+          }
+
           return nextMessages
         })
         appendTokenUsageStat({
@@ -197,8 +242,26 @@ function useChatStream({
         return
       }
 
-      onMessagesChange(previousMessages => previousMessages.slice(0, -1))
-      onError('请求失败，请检查服务状态')
+      onMessagesChange((previousMessages) => {
+        if (!assistantContent.trim()) {
+          return previousMessages.slice(0, -1)
+        }
+
+        const nextMessages = [...previousMessages]
+        const lastIndex = nextMessages.length - 1
+
+        if (lastIndex >= 0 && nextMessages[lastIndex].role === 'assistant') {
+          nextMessages[lastIndex] = {
+            ...nextMessages[lastIndex],
+            reasoning,
+            isThinking: false,
+            isReasoningExpanded: false,
+          }
+        }
+
+        return nextMessages
+      })
+      onError(error instanceof Error ? error.message : '请求失败，请检查服务状态')
     }
     finally {
       onLoadingChange(false)
@@ -210,7 +273,6 @@ function useChatStream({
     createMessageId,
     estimateTokenCount,
     inputValue,
-    messages,
     onError,
     onInputValueChange,
     onLoadingChange,

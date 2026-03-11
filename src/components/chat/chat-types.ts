@@ -4,6 +4,9 @@ interface ChatMessage {
   id: string
   role: ChatRole
   content: string
+  reasoning?: string
+  isThinking?: boolean
+  isReasoningExpanded?: boolean
 }
 
 interface ChatApiResponse {
@@ -30,7 +33,9 @@ interface ChatStreamUsage {
 
 type ChatStreamEvent
   = | { type: 'text', content: string }
+    | { type: 'reasoning', content: string }
     | { type: 'usage', usage: ChatStreamUsage }
+    | { type: 'error', error: string }
 
 export type {
   ChatApiResponse,

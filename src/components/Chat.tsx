@@ -30,7 +30,6 @@ const Chat: React.FC = () => {
 
   const { sendMessage, abort } = useChatStream({
     inputValue,
-    messages,
     canSubmit,
     estimateTokenCount,
     appendTokenUsageStat,
@@ -46,6 +45,21 @@ const Chat: React.FC = () => {
 
   const handleToggleTokenChart = () => {
     setIsTokenChartVisible(previous => !previous)
+  }
+
+  const handleReasoningToggle = (messageId: string) => {
+    setMessages((previousMessages) => {
+      return previousMessages.map((message) => {
+        if (message.id !== messageId || message.role !== 'assistant' || !message.reasoning) {
+          return message
+        }
+
+        return {
+          ...message,
+          isReasoningExpanded: !message.isReasoningExpanded,
+        }
+      })
+    })
   }
 
   const handleInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -73,7 +87,7 @@ const Chat: React.FC = () => {
         aria-label="聊天面板"
       >
         <div className="mb-4 min-h-0 flex-1 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
-          <MessageList messages={messages} />
+          <MessageList messages={messages} onReasoningToggle={handleReasoningToggle} />
         </div>
 
         <div className="flex gap-2">

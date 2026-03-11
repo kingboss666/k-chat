@@ -4,7 +4,11 @@ import { z } from 'zod'
 import { LongTermMemory } from '@/src/lib/long-term-memory'
 import { SummaryMemory } from '@/src/lib/memory'
 import { buildRagPrompt } from '@/src/lib/prompt-builder'
-import { generateQianwenChatCompletion, generateQianwenEmbedding } from '@/src/lib/qianwen'
+import {
+  generateQianwenChatCompletion,
+  generateQianwenChatCompletionStream,
+  generateQianwenEmbedding,
+} from '@/src/lib/qianwen'
 import { LocalVectorStore } from '@/src/lib/vector-store'
 
 interface ChatRequestBody {
@@ -141,13 +145,84 @@ function buildSystemPrompt() {
     '如果用户没有提供足够信息，例如只问“天气怎么样”，可以先简短追问地点。',
     '如果系统提供了知识库上下文，你必须优先基于知识库回答；知识库没有明确提到时，要明确说知识库中没有提供这个信息，不要猜测。',
     '最终回答保持简洁、准确、自然，优先用中文回答。',
-    `你必须遵循以下格式回答：
-      Thought: 你当前的思考过程
-      Action: 工具名称[参数]
-      Observation: 等待工具返回结果后填入
-      Final Answer: 最终结论。
-      上面每一步回答都需要换行。`,
+    `你必须遵循以下格式回答：'Thought: 你当前的一句简短思考，只保留当前在做什么，不要展开过多细节。Final Answer: 给用户的最终回答。'`,
   ].join('\n')
+}
+
+function normalizeReasoningText(reasoning: string) {
+  const normalized = reasoning.replace(/\s+/g, ' ').trim()
+  if (!normalized) {
+    return ''
+  }
+
+  const segments = normalized
+    .split(/[。！？.!?\n]/)
+    .map(segment => segment.trim())
+    .filter(Boolean)
+
+  const currentSegment = segments.at(-1) ?? normalized
+  return currentSegment.length > 48 ? `${currentSegment.slice(0, 48)}...` : currentSegment
+}
+
+function stripStructuredLabels(text: string) {
+  return text
+    .replace(/^\s*(?:\*+\s*)?Thought\s*[:：]\s*/i, '')
+    .replace(/^\s*(?:\*+\s*)?Final\s*Answer\s*[:：]\s*/i, '')
+    .replace(/^\s*(?:\*+\s*)?Final\s*Answe?\s*[:：]?\s*/i, '')
+    .replace(/^\s*(?:\*+\s*)?Final\s*Answ?\s*[:：]?\s*/i, '')
+    .replace(/^\s*(?:\*+\s*)?Final\s*Ans?\s*[:：]?\s*/i, '')
+    .replace(/^\s*(?:\*+\s*)?Final\s*A?\s*[:：]?\s*/i, '')
+    .trimStart()
+}
+
+function findFirstLabelIndex(content: string, labels: string[]) {
+  const normalizedContent = content.toLowerCase()
+  const indexes = labels
+    .map(label => normalizedContent.indexOf(label))
+    .filter(index => index >= 0)
+
+  if (indexes.length === 0) {
+    return -1
+  }
+
+  return Math.min(...indexes)
+}
+
+function parseStructuredAssistantOutput(rawContent: string) {
+  const thoughtLabels = ['thought:', 'thought：', '**thought:**', '**thought：**']
+  const finalAnswerLabels = ['final answer:', 'final answer：', '**final answer:**', '**final answer：**']
+  const thoughtIndex = findFirstLabelIndex(rawContent, thoughtLabels)
+
+  if (thoughtIndex === -1) {
+    return {
+      reasoning: '',
+      answer: '',
+      hasFinalAnswer: false,
+    }
+  }
+
+  const afterThought = rawContent.slice(thoughtIndex)
+  const thoughtLabel = thoughtLabels.find(label => afterThought.toLowerCase().startsWith(label)) ?? 'thought:'
+  const thoughtContent = afterThought.slice(thoughtLabel.length)
+  const finalAnswerRelativeIndex = findFirstLabelIndex(thoughtContent, finalAnswerLabels)
+
+  if (finalAnswerRelativeIndex === -1) {
+    return {
+      reasoning: normalizeReasoningText(thoughtContent),
+      answer: '',
+      hasFinalAnswer: false,
+    }
+  }
+
+  const reasoningText = thoughtContent.slice(0, finalAnswerRelativeIndex)
+  const finalAnswerSection = thoughtContent.slice(finalAnswerRelativeIndex)
+  const finalAnswerLabel = finalAnswerLabels.find(label => finalAnswerSection.toLowerCase().startsWith(label)) ?? 'final answer:'
+
+  return {
+    reasoning: normalizeReasoningText(reasoningText),
+    answer: stripStructuredLabels(finalAnswerSection.slice(finalAnswerLabel.length)),
+    hasFinalAnswer: true,
+  }
 }
 
 function buildLongTermMemoryPrompt(userMessage: string, assistantMessage: string, currentProfile: string) {
@@ -401,25 +476,52 @@ async function* generateStreamResponse(userMessage: string) {
   const totalUsage = { prompt: 0, completion: 0, total: 0 }
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-    const completion = await generateQianwenChatCompletion({
+    let completion: Awaited<ReturnType<typeof generateQianwenChatCompletion>> | null = null
+    let streamedRawContent = ''
+    let emittedAnswerLength = 0
+    let lastReasoning = ''
+
+    for await (const event of generateQianwenChatCompletionStream({
       messages: llmMessages,
       tools: CHAT_TOOLS,
       temperature: 0.2,
-    })
+    })) {
+      if (event.type === 'text') {
+        streamedRawContent += event.content
+        const parsedOutput = parseStructuredAssistantOutput(streamedRawContent)
+
+        if (parsedOutput.reasoning && parsedOutput.reasoning !== lastReasoning) {
+          lastReasoning = parsedOutput.reasoning
+          yield { type: 'reasoning', content: parsedOutput.reasoning }
+        }
+
+        if (parsedOutput.hasFinalAnswer && parsedOutput.answer.length > emittedAnswerLength) {
+          yield { type: 'text', content: parsedOutput.answer.slice(emittedAnswerLength) }
+          emittedAnswerLength = parsedOutput.answer.length
+        }
+        continue
+      }
+
+      completion = event.result
+    }
+
+    if (!completion) {
+      throw new Error('QIANWEN_STREAM_ERROR: missing completion result')
+    }
 
     totalUsage.prompt += completion.usage.prompt
     totalUsage.completion += completion.usage.completion
     totalUsage.total += completion.usage.total
 
-    if (completion.toolCalls.length === 0) {
-      const finalContent = completion.content.trim()
+    const parsedCompletion = parseStructuredAssistantOutput(completion.content)
 
-      // 流式输出，每次发送 1-3 个字符
-      for (let i = 0; i < finalContent.length; i += 1) {
-        const chunk = finalContent[i]
-        yield { type: 'text', content: chunk }
-        // 添加微小延迟，确保流式效果
-        await new Promise(resolve => setTimeout(resolve, 10))
+    if (completion.toolCalls.length === 0) {
+      const finalContent = stripStructuredLabels(
+        parsedCompletion.hasFinalAnswer ? parsedCompletion.answer : completion.content,
+      ).trim()
+
+      if (finalContent.length > emittedAnswerLength) {
+        yield { type: 'text', content: finalContent.slice(emittedAnswerLength) }
       }
 
       yield { type: 'usage', usage: totalUsage }
