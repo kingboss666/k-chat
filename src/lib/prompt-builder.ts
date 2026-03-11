@@ -17,6 +17,7 @@ export function buildRagPrompt({ question, chunks }: BuildRagPromptParams) {
     ? normalizedChunks.join('\n')
     : 'No relevant context found.'
 
+  // 把检索结果拼成一个稳定 prompt，约束模型尽量只基于知识库回答。
   return [
     'You must answer based on the following context.',
     '',

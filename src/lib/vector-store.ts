@@ -82,6 +82,7 @@ export class LocalVectorStore {
   async search(queryVector: number[], topK = 3): Promise<VectorSearchResult[]> {
     const documents = await this.loadAll()
 
+    // 当前是最简单实现：全量扫描所有向量，算相似度后直接取 topK。
     return documents
       .map(document => ({
         ...document,

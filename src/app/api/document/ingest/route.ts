@@ -17,6 +17,7 @@ export async function POST(req: Request) {
     const body = await req.json()
     const payload = IngestRequestSchema.parse(body)
 
+    // 统一入库入口：整篇文档在这里完成切块。
     const chunks = chunkDocument(payload.text, {
       maxTokens: payload.maxTokens,
       overlapTokens: payload.overlapTokens,
@@ -25,6 +26,7 @@ export async function POST(req: Request) {
 
     const documents = await Promise.all(
       chunks.map(async (chunk) => {
+        // 每个 chunk 单独生成 embedding，后续检索按 chunk 粒度命中。
         const { vector } = await generateQianwenEmbedding(chunk.text)
 
         return {

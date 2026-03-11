@@ -142,6 +142,7 @@ function buildSystemPrompt() {
 }
 
 async function buildKnowledgeContext(userMessage: string) {
+  // chat 每次收到用户问题，都先走一次 query embedding + topK 检索。
   const { vector } = await generateQianwenEmbedding(userMessage)
   const results = await vectorStore.search(vector, DEFAULT_RAG_TOP_K)
   const chunks = results.map(result => ({ text: result.text }))
@@ -191,6 +192,7 @@ async function* generateStreamResponse(userMessage: string) {
     })
   }
 
+  // 把知识库上下文作为额外 system prompt 注入现有 chat 流程。
   llmMessages.push({
     role: 'system',
     content: knowledgeContext.prompt,
