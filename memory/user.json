@@ -1,5 +1,9 @@
 {
-  "name": "",
-  "profession": "",
-  "interests": []
+  "interests": [],
+  "preferences": {},
+  "facts": [
+    "《白鹭折叠地图》的编号是 MH-M-314"
+  ],
+  "profession": "前端工程师",
+  "name": "KB"
 }

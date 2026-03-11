@@ -5,8 +5,29 @@ export interface UserProfile {
   name?: string
   profession?: string
   interests?: string[]
-  preferences?: Record<string, unknown>
+  preferences?: Record<string, string>
+  facts?: string[]
   [key: string]: unknown
+}
+
+function uniqueNonEmpty(values: string[] | undefined): string[] {
+  if (!values) {
+    return []
+  }
+
+  return [...new Set(values.map(item => item.trim()).filter(Boolean))]
+}
+
+function normalizePreferences(preferences: Record<string, unknown> | undefined): Record<string, string> {
+  if (!preferences) {
+    return {}
+  }
+
+  return Object.fromEntries(
+    Object.entries(preferences)
+      .map(([key, value]) => [key.trim(), typeof value === 'string' ? value.trim() : ''])
+      .filter(([key, value]) => key.length > 0 && value.length > 0),
+  )
 }
 
 export class LongTermMemory {
@@ -42,7 +63,33 @@ export class LongTermMemory {
   }
 
   update(updates: Partial<UserProfile>): void {
-    this.profile = { ...this.profile, ...updates }
+    const nextProfile: UserProfile = {
+      ...this.profile,
+      ...updates,
+    }
+
+    if (this.profile.interests || updates.interests) {
+      nextProfile.interests = uniqueNonEmpty([
+        ...(this.profile.interests ?? []),
+        ...(updates.interests ?? []),
+      ])
+    }
+
+    if (this.profile.facts || updates.facts) {
+      nextProfile.facts = uniqueNonEmpty([
+        ...(this.profile.facts ?? []),
+        ...(updates.facts ?? []),
+      ])
+    }
+
+    if (this.profile.preferences || updates.preferences) {
+      nextProfile.preferences = {
+        ...normalizePreferences(this.profile.preferences),
+        ...normalizePreferences(updates.preferences),
+      }
+    }
+
+    this.profile = nextProfile
   }
 
   get(key: string): unknown {
@@ -66,6 +113,17 @@ export class LongTermMemory {
 
     if (this.profile.interests && this.profile.interests.length > 0) {
       parts.push(`兴趣：${this.profile.interests.join('、')}`)
+    }
+
+    if (this.profile.preferences && Object.keys(this.profile.preferences).length > 0) {
+      const preferenceText = Object.entries(this.profile.preferences)
+        .map(([key, value]) => `${key}=${value}`)
+        .join('；')
+      parts.push(`偏好：${preferenceText}`)
+    }
+
+    if (this.profile.facts && this.profile.facts.length > 0) {
+      parts.push(`已知事实：${this.profile.facts.join('；')}`)
     }
 
     return parts.length > 0 ? parts.join('\n') : ''
