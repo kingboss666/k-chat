@@ -1,5 +1,6 @@
 import type { QianwenMessage, QianwenToolCall, QianwenToolDefinition } from '@/src/lib/qianwen'
 import { z } from 'zod'
+import { LongTermMemory } from '@/src/lib/long-term-memory'
 import { SummaryMemory } from '@/src/lib/memory'
 import { generateQianwenChatCompletion } from '@/src/lib/qianwen'
 
@@ -413,6 +414,7 @@ Final Answer: 最终结论。
 `
 
 const chatMemory = new SummaryMemory(20)
+const longTermMemory = new LongTermMemory()
 
 async function generateSummary(messages: Array<{ role: 'user' | 'assistant', content: string }>): Promise<string> {
   const conversationText = messages
@@ -442,13 +444,23 @@ async function generateToolAwareAnswer(userMessage: string) {
     chatMemory.clearOldMessages()
   }
 
+  await longTermMemory.load()
+
   const history = chatMemory.getHistory()
   const summary = chatMemory.getSummary()
+  const userContext = longTermMemory.toContextString()
 
   const llmMessages: QianwenMessage[] = [
     { role: 'user', content: SYSTEM_PROMPT },
     { role: 'system', content: buildSystemPrompt() },
   ]
+
+  if (userContext) {
+    llmMessages.push({
+      role: 'system',
+      content: `用户信息：\n${userContext}`,
+    })
+  }
 
   if (summary) {
     llmMessages.push({
@@ -464,8 +476,6 @@ async function generateToolAwareAnswer(userMessage: string) {
     })),
     { role: 'user', content: userMessage },
   )
-
-  console.log('summary', summary)
 
   const totalUsage = {
     prompt: 0,
