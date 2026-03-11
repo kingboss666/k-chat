@@ -21,7 +21,6 @@ const Chat: React.FC = () => {
 
   const {
     tokenUsageStats,
-    latestTokenStat,
     appendTokenUsageStat,
     formatDuration,
     formatNullableDuration,
@@ -70,10 +69,10 @@ const Chat: React.FC = () => {
   return (
     <>
       <section
-        className="flex min-h-[65vh] flex-col rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-xl shadow-slate-200/70 backdrop-blur"
+        className="flex h-[calc(100vh-12rem)] flex-col rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-xl shadow-slate-200/70 backdrop-blur"
         aria-label="聊天面板"
       >
-        <div className="mb-4 flex-1 space-y-3 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+        <div className="mb-4 min-h-0 flex-1 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
           <MessageList messages={messages} />
         </div>
 
@@ -110,7 +109,6 @@ const Chat: React.FC = () => {
       <TokenPanel
         isVisible={isTokenChartVisible}
         onToggle={handleToggleTokenChart}
-        latestTokenStat={latestTokenStat}
         tokenUsageStats={tokenUsageStats}
         formatDuration={formatDuration}
         formatNullableDuration={formatNullableDuration}

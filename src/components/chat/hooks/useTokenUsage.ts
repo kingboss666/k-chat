@@ -43,10 +43,6 @@ function useTokenUsage() {
   const [tokenUsageStats, setTokenUsageStats] = useState<TokenUsageStat[]>([])
   const idCounterRef = useRef(0)
 
-  const latestTokenStat = useMemo(() => {
-    return tokenUsageStats[tokenUsageStats.length - 1]
-  }, [tokenUsageStats])
-
   const appendTokenUsageStat = useCallback((params: AppendTokenUsageParams) => {
     const {
       usage,
@@ -91,7 +87,6 @@ function useTokenUsage() {
 
   return {
     tokenUsageStats,
-    latestTokenStat,
     appendTokenUsageStat,
     formatDuration,
     formatNullableDuration,

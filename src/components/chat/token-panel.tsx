@@ -1,10 +1,10 @@
 import type { TokenUsageStat } from './chat-types'
+import { useEffect, useRef } from 'react'
 import { cn } from '@/src/lib/utils'
 
 interface TokenPanelProps {
   isVisible: boolean
   onToggle: () => void
-  latestTokenStat: TokenUsageStat | undefined
   tokenUsageStats: TokenUsageStat[]
   formatDuration: (durationMs: number) => string
   formatNullableDuration: (durationMs: number | null) => string
@@ -14,12 +14,18 @@ interface TokenPanelProps {
 const TokenPanel: React.FC<TokenPanelProps> = ({
   isVisible,
   onToggle,
-  latestTokenStat,
   tokenUsageStats,
   formatDuration,
   formatNullableDuration,
   formatNullableNumber,
 }) => {
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (scrollContainerRef.current && tokenUsageStats.length > 0) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
+    }
+  }, [tokenUsageStats])
   return (
     <>
       <button
@@ -43,17 +49,7 @@ const TokenPanel: React.FC<TokenPanelProps> = ({
           <p className="text-sm font-medium text-slate-900">Token 消耗图表</p>
         </div>
 
-        {latestTokenStat
-          ? (
-              <p className="mb-3 text-xs leading-5 text-slate-600">
-                {`最近一轮：Prompt ${latestTokenStat.prompt} / Completion ${latestTokenStat.completion} / Total ${latestTokenStat.total} / 首 token ${formatNullableDuration(latestTokenStat.firstTokenLatencyMs)} / 总耗时 ${formatDuration(latestTokenStat.generationDurationMs)} / 速度 ${formatNullableNumber(latestTokenStat.tokensPerSecond)} tok/s / 状态 ${latestTokenStat.isAborted ? '已终止' : '完成'}`}
-              </p>
-            )
-          : (
-              <p className="mb-3 text-xs text-slate-500">暂无消耗数据，发送消息后可查看</p>
-            )}
-
-        <div className="h-[calc(100%-64px)] overflow-y-auto pr-1">
+        <div ref={scrollContainerRef} className="h-[calc(100%-32px)] overflow-y-auto pr-1">
           {tokenUsageStats.length > 0
             ? (
                 <div className="space-y-2">

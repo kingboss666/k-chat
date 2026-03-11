@@ -87,13 +87,10 @@ interface QianwenCompletionResponse {
   }
 }
 
-const QIANWEN_API_URL = process.env.QIANWEN_BASE_URL
-  ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+const QIANWEN_API_URL = process.env.QIANWEN_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
 const QIANWEN_MODEL = process.env.QIANWEN_MODEL ?? 'qwen-plus'
 
-export type QianwenStreamEvent
-  = | { type: 'text', content: string }
-    | { type: 'usage', usage: QianwenUsage }
+export type QianwenStreamEvent = | { type: 'text', content: string } | { type: 'usage', usage: QianwenUsage }
 
 const EMPTY_USAGE: QianwenUsage = {
   prompt: 0,

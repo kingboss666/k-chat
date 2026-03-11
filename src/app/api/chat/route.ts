@@ -10,6 +10,9 @@ interface ChatRequestBody {
 
 const MAX_TOOL_ROUNDS = 4
 
+const chatMemory = new SummaryMemory(20)
+const longTermMemory = new LongTermMemory()
+
 const TimeToolSchema = z.object({
   timezone: z.string().trim().min(1).optional(),
   locale: z.string().trim().min(1).optional(),
@@ -124,28 +127,104 @@ function buildSystemPrompt() {
     '如果工具执行失败或结果不完整，要明确告诉用户，不得编造。',
     '如果用户没有提供足够信息，例如只问“天气怎么样”，可以先简短追问地点。',
     '最终回答保持简洁、准确、自然，优先用中文回答。',
+    `你必须遵循以下格式回答：
+      Thought: 你当前的思考过程
+      Action: 工具名称[参数]
+      Observation: 等待工具返回结果后填入
+      Final Answer: 最终结论。
+      上面每一步回答都需要换行。`,
   ].join('\n')
 }
 
-function normalizeMessage(body: ChatRequestBody): string {
-  return body.message?.trim() ?? ''
-}
+async function* generateStreamResponse(userMessage: string) {
+  if (chatMemory.shouldSummarize()) {
+    const toSummarize = chatMemory.getMessagesToSummarize()
+    const newSummary = await generateSummary(toSummarize)
+    chatMemory.setSummary(newSummary)
+    chatMemory.clearOldMessages()
+  }
 
-function createNdjsonStream(answer: string, usage: { prompt: number, completion: number, total: number }) {
-  const encoder = new TextEncoder()
+  await longTermMemory.load()
 
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      const chunks = answer.match(/.{1,24}/gs) ?? []
+  const history = chatMemory.getHistory()
+  const summary = chatMemory.getSummary()
+  const userContext = longTermMemory.toContextString()
 
-      for (const chunk of chunks) {
-        controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'text', content: chunk })}\n`))
+  console.log('history', history)
+  console.log('summary', summary)
+
+  const llmMessages: QianwenMessage[] = [
+    { role: 'system', content: buildSystemPrompt() },
+  ]
+
+  if (userContext) {
+    llmMessages.push({
+      role: 'system',
+      content: `用户信息：\n${userContext}`,
+    })
+  }
+
+  if (summary) {
+    llmMessages.push({
+      role: 'system',
+      content: `对话摘要：\n${summary}`,
+    })
+  }
+
+  llmMessages.push(
+    ...history.map(message => ({ role: message.role, content: message.content })),
+    { role: 'user', content: userMessage },
+  )
+
+  const totalUsage = { prompt: 0, completion: 0, total: 0 }
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+    const completion = await generateQianwenChatCompletion({
+      messages: llmMessages,
+      tools: CHAT_TOOLS,
+      temperature: 0.2,
+    })
+
+    totalUsage.prompt += completion.usage.prompt
+    totalUsage.completion += completion.usage.completion
+    totalUsage.total += completion.usage.total
+
+    if (completion.toolCalls.length === 0) {
+      const finalContent = completion.content.trim()
+
+      // 流式输出，每次发送 1-3 个字符
+      for (let i = 0; i < finalContent.length; i += 1) {
+        const chunk = finalContent[i]
+        yield { type: 'text', content: chunk }
+        // 添加微小延迟，确保流式效果
+        await new Promise(resolve => setTimeout(resolve, 10))
       }
 
-      controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'usage', usage })}\n`))
-      controller.close()
-    },
-  })
+      yield { type: 'usage', usage: totalUsage }
+
+      chatMemory.push({ role: 'user', content: userMessage })
+      chatMemory.push({ role: 'assistant', content: finalContent })
+      return
+    }
+
+    llmMessages.push({
+      role: 'assistant',
+      content: completion.content || null,
+      tool_calls: completion.toolCalls,
+    })
+
+    for (const toolCall of completion.toolCalls) {
+      const toolResult = await executeToolCall(toolCall)
+      llmMessages.push({
+        role: 'tool',
+        tool_call_id: toolCall.id,
+        name: toolCall.function.name,
+        content: JSON.stringify(toolResult),
+      })
+    }
+  }
+
+  throw new Error('工具调用轮次超出限制，请重试。')
 }
 
 function formatNumber(value: number) {
@@ -404,18 +483,6 @@ async function executeToolCall(toolCall: QianwenToolCall) {
   }
 }
 
-const SYSTEM_PROMPT = `
-你必须遵循以下格式回答：
-Thought: 你当前的思考过程
-Action: 工具名称[参数]
-Observation: 等待工具返回结果后填入
-Final Answer: 最终结论。
-上面每一步都需要换行
-`
-
-const chatMemory = new SummaryMemory(20)
-const longTermMemory = new LongTermMemory()
-
 async function generateSummary(messages: Array<{ role: 'user' | 'assistant', content: string }>): Promise<string> {
   const conversationText = messages
     .map(msg => `${msg.role}: ${msg.content}`)
@@ -436,99 +503,10 @@ ${conversationText}
   return completion.content.trim()
 }
 
-async function generateToolAwareAnswer(userMessage: string) {
-  if (chatMemory.shouldSummarize()) {
-    const toSummarize = chatMemory.getMessagesToSummarize()
-    const newSummary = await generateSummary(toSummarize)
-    chatMemory.setSummary(newSummary)
-    chatMemory.clearOldMessages()
-  }
-
-  await longTermMemory.load()
-
-  const history = chatMemory.getHistory()
-  const summary = chatMemory.getSummary()
-  const userContext = longTermMemory.toContextString()
-
-  const llmMessages: QianwenMessage[] = [
-    { role: 'user', content: SYSTEM_PROMPT },
-    { role: 'system', content: buildSystemPrompt() },
-  ]
-
-  if (userContext) {
-    llmMessages.push({
-      role: 'system',
-      content: `用户信息：\n${userContext}`,
-    })
-  }
-
-  if (summary) {
-    llmMessages.push({
-      role: 'system',
-      content: `对话摘要：\n${summary}`,
-    })
-  }
-
-  llmMessages.push(
-    ...history.map(message => ({
-      role: message.role,
-      content: message.content,
-    })),
-    { role: 'user', content: userMessage },
-  )
-
-  const totalUsage = {
-    prompt: 0,
-    completion: 0,
-    total: 0,
-  }
-
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-    const completion = await generateQianwenChatCompletion({
-      messages: llmMessages,
-      tools: CHAT_TOOLS,
-      temperature: 0.2,
-    })
-
-    totalUsage.prompt += completion.usage.prompt
-    totalUsage.completion += completion.usage.completion
-    totalUsage.total += completion.usage.total
-
-    if (completion.toolCalls.length === 0) {
-      const assistantMessage = completion.content.trim()
-      chatMemory.push({ role: 'user', content: userMessage })
-      chatMemory.push({ role: 'assistant', content: assistantMessage })
-
-      return {
-        answer: assistantMessage,
-        usage: totalUsage,
-      }
-    }
-
-    llmMessages.push({
-      role: 'assistant',
-      content: completion.content || null,
-      tool_calls: completion.toolCalls,
-    })
-
-    for (const toolCall of completion.toolCalls) {
-      const toolResult = await executeToolCall(toolCall)
-      llmMessages.push({
-        role: 'tool',
-        tool_call_id: toolCall.id,
-        name: toolCall.function.name,
-        content: JSON.stringify(toolResult),
-      })
-    }
-  }
-
-  throw new Error('工具调用轮次超出限制，请重试。')
-}
-
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as ChatRequestBody
-    const userMessage = normalizeMessage(body)
+    const userMessage = body.message?.trim() ?? ''
 
     if (userMessage.length === 0) {
       return new Response(
@@ -542,9 +520,26 @@ export async function POST(req: Request) {
       )
     }
 
-    const { answer, usage } = await generateToolAwareAnswer(userMessage)
+    const encoder = new TextEncoder()
 
-    return new Response(createNdjsonStream(answer, usage), {
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          for await (const event of generateStreamResponse(userMessage)) {
+            const line = `${JSON.stringify(event)}\n`
+            controller.enqueue(encoder.encode(line))
+          }
+          controller.close()
+        }
+        catch (error) {
+          const errorMessage = error instanceof Error ? error.message : 'SERVER_ERROR'
+          controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'error', error: errorMessage })}\n`))
+          controller.close()
+        }
+      },
+    })
+
+    return new Response(stream, {
       status: 200,
       headers: {
         'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -553,6 +548,7 @@ export async function POST(req: Request) {
       },
     })
   }
+
   catch (error: unknown) {
     return new Response(
       JSON.stringify({
