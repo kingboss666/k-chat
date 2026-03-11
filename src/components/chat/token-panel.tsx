@@ -1,6 +1,6 @@
 import type { TokenUsageStat } from './chat-types'
 import { useEffect, useRef } from 'react'
-import { cn } from '@/src/lib/utils'
+import { cn } from '@/src/utils'
 
 interface TokenPanelProps {
   isVisible: boolean

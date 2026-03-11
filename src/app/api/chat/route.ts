@@ -2,16 +2,20 @@ import type { QianwenMessage, QianwenToolCall, QianwenToolDefinition } from '@/s
 import { z } from 'zod'
 import { LongTermMemory } from '@/src/lib/long-term-memory'
 import { SummaryMemory } from '@/src/lib/memory'
-import { generateQianwenChatCompletion } from '@/src/lib/qianwen'
+import { buildRagPrompt } from '@/src/lib/prompt-builder'
+import { generateQianwenChatCompletion, generateQianwenEmbedding } from '@/src/lib/qianwen'
+import { LocalVectorStore } from '@/src/lib/vector-store'
 
 interface ChatRequestBody {
   message?: string
 }
 
 const MAX_TOOL_ROUNDS = 4
+const DEFAULT_RAG_TOP_K = 3
 
 const chatMemory = new SummaryMemory(20)
 const longTermMemory = new LongTermMemory()
+const vectorStore = new LocalVectorStore()
 
 const TimeToolSchema = z.object({
   timezone: z.string().trim().min(1).optional(),
@@ -126,6 +130,7 @@ function buildSystemPrompt() {
     '四则运算、括号表达式、简单数学题必须调用 calculate_expression。',
     '如果工具执行失败或结果不完整，要明确告诉用户，不得编造。',
     '如果用户没有提供足够信息，例如只问“天气怎么样”，可以先简短追问地点。',
+    '如果系统提供了知识库上下文，你必须优先基于知识库回答；知识库没有明确提到时，要明确说知识库中没有提供这个信息，不要猜测。',
     '最终回答保持简洁、准确、自然，优先用中文回答。',
     `你必须遵循以下格式回答：
       Thought: 你当前的思考过程
@@ -134,6 +139,20 @@ function buildSystemPrompt() {
       Final Answer: 最终结论。
       上面每一步回答都需要换行。`,
   ].join('\n')
+}
+
+async function buildKnowledgeContext(userMessage: string) {
+  const { vector } = await generateQianwenEmbedding(userMessage)
+  const results = await vectorStore.search(vector, DEFAULT_RAG_TOP_K)
+  const chunks = results.map(result => ({ text: result.text }))
+
+  return {
+    results,
+    prompt: buildRagPrompt({
+      question: userMessage,
+      chunks,
+    }),
+  }
 }
 
 async function* generateStreamResponse(userMessage: string) {
@@ -149,6 +168,7 @@ async function* generateStreamResponse(userMessage: string) {
   const history = chatMemory.getHistory()
   const summary = chatMemory.getSummary()
   const userContext = longTermMemory.toContextString()
+  const knowledgeContext = await buildKnowledgeContext(userMessage)
 
   console.log('history', history)
   console.log('summary', summary)
@@ -170,6 +190,11 @@ async function* generateStreamResponse(userMessage: string) {
       content: `对话摘要：\n${summary}`,
     })
   }
+
+  llmMessages.push({
+    role: 'system',
+    content: knowledgeContext.prompt,
+  })
 
   llmMessages.push(
     ...history.map(message => ({ role: message.role, content: message.content })),

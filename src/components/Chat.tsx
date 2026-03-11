@@ -2,7 +2,7 @@
 
 import type { ChatMessage } from './chat/chat-types'
 import { useMemo, useState } from 'react'
-import { cn } from '@/src/lib/utils'
+import { cn } from '@/src/utils'
 import { useChatStream } from './chat/hooks/useChatStream'
 import { useTokenUsage } from './chat/hooks/useTokenUsage'
 import { MessageList } from './chat/message-list'

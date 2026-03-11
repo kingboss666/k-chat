@@ -24,23 +24,14 @@ export interface QianwenMessage {
   tool_calls?: QianwenToolCall[]
 }
 
-export interface GenerateQianwenTextParams {
-  messages: QianwenMessage[]
-}
-
 export interface GenerateQianwenChatCompletionParams {
   messages: QianwenMessage[]
   tools?: QianwenToolDefinition[]
   temperature?: number
 }
 
-export interface GenerateQianwenTextResult {
-  content: string
-  usage: {
-    prompt: number
-    completion: number
-    total: number
-  }
+export interface GenerateQianwenEmbeddingResult {
+  vector: number[]
   latency: number
 }
 
@@ -89,13 +80,22 @@ interface QianwenCompletionResponse {
 
 const QIANWEN_API_URL = process.env.QIANWEN_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
 const QIANWEN_MODEL = process.env.QIANWEN_MODEL ?? 'qwen-plus'
-
-export type QianwenStreamEvent = | { type: 'text', content: string } | { type: 'usage', usage: QianwenUsage }
+const QIANWEN_EMBEDDING_API_URL = process.env.QIANWEN_EMBEDDING_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings'
+const QIANWEN_EMBEDDING_MODEL = process.env.QIANWEN_EMBEDDING_MODEL ?? 'text-embedding-v4'
 
 const EMPTY_USAGE: QianwenUsage = {
   prompt: 0,
   completion: 0,
   total: 0,
+}
+
+function createMockEmbedding(text: string) {
+  const seed = Array.from(text).reduce((total, char, index) => total + char.charCodeAt(0) * (index + 1), 0)
+
+  return Array.from({ length: 16 }, (_, index) => {
+    const value = Math.sin(seed + index * 17) * 0.5 + Math.cos(seed / (index + 1 || 1)) * 0.5
+    return Number(value.toFixed(6))
+  })
 }
 
 function normalizeQianwenUsage(
@@ -292,142 +292,49 @@ export async function generateQianwenChatCompletion({
   }
 }
 
-export async function* generateQianwenTextStream({ messages }: GenerateQianwenTextParams): AsyncGenerator<QianwenStreamEvent> {
+export async function generateQianwenEmbedding(text: string): Promise<GenerateQianwenEmbeddingResult> {
   const apiKey = process.env.QIANWEN_API_KEY
 
-  // 本地 mock 也按字符流式产出，确保前端流式链路可验证
   if (!apiKey) {
-    const lastUserMessage = [...messages].reverse().find(item => item.role === 'user')?.content ?? ''
-    const mockContent = `Mock Qianwen Reply: ${lastUserMessage}`
-    for (const char of mockContent) {
-      yield { type: 'text', content: char }
+    return {
+      vector: createMockEmbedding(text),
+      latency: 0,
     }
-    yield {
-      type: 'usage',
-      usage: {
-        prompt: 0,
-        completion: 0,
-        total: 0,
-      },
-    }
-    return
   }
 
-  const qianwenMessages: QianwenMessage[] = messages.map(message => ({
-    role: message.role,
-    content: message.content,
-  }))
-
-  // 流式模式：请求上游返回增量片段
-  const response = await fetch(QIANWEN_API_URL, {
+  const startedAt = performance.now()
+  const response = await fetch(QIANWEN_EMBEDDING_API_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: QIANWEN_MODEL,
-      messages: qianwenMessages,
-      temperature: 0.7,
-      stream: true,
-      stream_options: {
-        include_usage: true,
-      },
+      model: QIANWEN_EMBEDDING_MODEL,
+      input: text,
+      encoding_format: 'float',
     }),
   })
 
   if (!response.ok) {
     const errorText = await response.text()
-    throw new Error(`QIANWEN_ERROR: ${response.status} ${errorText}`)
+    throw new Error(`QIANWEN_EMBEDDING_ERROR: ${response.status} ${errorText}`)
   }
 
-  if (!response.body) {
-    throw new Error('QIANWEN_ERROR: empty stream body')
+  const payload = await response.json() as {
+    data?: Array<{
+      embedding?: number[]
+    }>
   }
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  // buffer 用于拼接跨 chunk 的半行数据
-  let buffer = ''
+  const vector = payload.data?.[0]?.embedding
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) {
-      buffer += decoder.decode()
-      break
-    }
-    buffer += decoder.decode(value, { stream: true })
-
-    // SSE 以换行分隔事件，保留最后一段未完整行到下轮继续拼接
-    const lines = buffer.split('\n')
-    buffer = lines.pop() ?? ''
-
-    for (const rawLine of lines) {
-      const line = rawLine.trim()
-      // 只处理 data: 行，跳过空行和其他字段（event/id/retry）
-      if (!line || !line.startsWith('data:')) {
-        continue
-      }
-
-      const data = line.slice(5).trim()
-      // SSE 结束标记，立即停止生成器
-      if (data === '[DONE]') {
-        return
-      }
-
-      try {
-        const payload = JSON.parse(data) as QianwenStreamChunk
-
-        // 兼容不同返回结构：优先 delta.content，回退到 message.content
-        const deltaText
-          = payload.choices?.[0]?.delta?.content
-            ?? payload.choices?.[0]?.message?.content
-            ?? ''
-        if (deltaText) {
-          yield { type: 'text', content: deltaText }
-        }
-
-        const usage = normalizeQianwenUsage(payload.usage)
-        if (usage) {
-          yield { type: 'usage', usage }
-        }
-      }
-      catch {
-        // 某些 data 行可能不是 JSON，忽略后继续处理后续片段
-      }
-    }
+  if (!Array.isArray(vector) || vector.some(value => typeof value !== 'number')) {
+    throw new Error('QIANWEN_EMBEDDING_ERROR: invalid embedding response')
   }
 
-  // 处理循环结束后 buffer 中可能残留的最后一批事件
-  const remainingLines = buffer.split('\n')
-
-  for (const rawLine of remainingLines) {
-    const line = rawLine.trim()
-    if (!line || !line.startsWith('data:')) {
-      continue
-    }
-
-    const data = line.slice(5).trim()
-    if (data === '[DONE]') {
-      return
-    }
-
-    try {
-      const payload = JSON.parse(data) as QianwenStreamChunk
-      const deltaText = payload.choices?.[0]?.delta?.content
-        ?? payload.choices?.[0]?.message?.content
-        ?? ''
-      if (deltaText) {
-        yield { type: 'text', content: deltaText }
-      }
-
-      const usage = normalizeQianwenUsage(payload.usage)
-      if (usage) {
-        yield { type: 'usage', usage }
-      }
-    }
-    catch {
-      // 某些 data 行可能不是 JSON，忽略后继续处理后续片段
-    }
+  return {
+    vector,
+    latency: performance.now() - startedAt,
   }
 }

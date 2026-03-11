@@ -10,6 +10,6 @@ export default metac({
     '@typescript-eslint/prefer-literal-enum-member': 'off',
     'no-empty-pattern': 'off',
   },
-  ignores: ['.vscode/**', '.cursor/**', '.agents/**'],
+  ignores: ['.vscode/**', '.cursor/**', '.agents/**', '**/*.md'],
   tailwindcss: {},
 })
