@@ -1,5 +1,5 @@
 import type { ChatStreamUsage, TokenUsageStat } from '../chat-types'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 
 function formatDuration(durationMs: number) {
   return `${(durationMs / 1000).toFixed(2)}s`
