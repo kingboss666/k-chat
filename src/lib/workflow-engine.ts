@@ -8,6 +8,21 @@ export interface WorkflowRunHooks<TContext> {
   onStepComplete?: (step: WorkflowStep<TContext>, context: TContext) => Promise<void> | void
 }
 
+export interface PlannedWorkflowState<TContext, TResult> {
+  context: TContext
+  results: Record<string, TResult>
+}
+
+export interface PlannedWorkflowOutcome<TContext, TResult> {
+  context?: TContext
+  result: TResult
+}
+
+export interface PlannedWorkflowRunHooks<TTask, TContext, TResult> {
+  onTaskStart?: (task: TTask, state: PlannedWorkflowState<TContext, TResult>) => Promise<void> | void
+  onTaskComplete?: (task: TTask, state: PlannedWorkflowState<TContext, TResult>) => Promise<void> | void
+}
+
 export async function runWorkflow<TContext>(
   workflow: WorkflowStep<TContext>[],
   initialContext: TContext,
@@ -22,4 +37,50 @@ export async function runWorkflow<TContext>(
   }
 
   return context
+}
+
+export async function* runPlannedWorkflow<TTask extends { id: string }, TContext, TResult, TEvent = never>(
+  tasks: TTask[],
+  initialState: PlannedWorkflowState<TContext, TResult>,
+  executeTask: (
+    task: TTask,
+    state: PlannedWorkflowState<TContext, TResult>,
+  ) => AsyncGenerator<TEvent, PlannedWorkflowOutcome<TContext, TResult>, void>,
+  hooks?: PlannedWorkflowRunHooks<TTask, TContext, TResult>,
+): AsyncGenerator<TEvent, PlannedWorkflowState<TContext, TResult>> {
+  let state = initialState
+
+  for (const task of tasks) {
+    await hooks?.onTaskStart?.(task, state)
+
+    const iterator = executeTask(task, state)[Symbol.asyncIterator]()
+    let taskOutcome: PlannedWorkflowOutcome<TContext, TResult> | undefined
+
+    while (true) {
+      const iteration = await iterator.next()
+
+      if (iteration.done) {
+        taskOutcome = iteration.value
+        break
+      }
+
+      yield iteration.value
+    }
+
+    if (!taskOutcome) {
+      throw new Error(`任务 ${task.id} 没有返回执行结果。`)
+    }
+
+    state = {
+      context: taskOutcome.context ?? state.context,
+      results: {
+        ...state.results,
+        [task.id]: taskOutcome.result,
+      },
+    }
+
+    await hooks?.onTaskComplete?.(task, state)
+  }
+
+  return state
 }

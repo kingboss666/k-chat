@@ -141,6 +141,17 @@ pnpm lint
 pnpm lint:fix
 ```
 
+## 工程工作流
+
+仓库内的功能设计、行为变更和重要重构统一走 `OpenSpec` 工作流，相关文档放在 `openspec/` 下。
+
+对于非琐碎的 AI 编码任务，默认采用 `Generator + Evaluator` 双角色流程，而不是让单个 agent 从需求理解一路做到自我验收：
+
+- `Generator` 负责产出计划、修改和验证证据
+- `Evaluator` 负责独立审查，并给出 `PASS`、`REVISE` 或 `BLOCK`
+
+具体操作手册见 `openspec/workflows/generator-evaluator.md`。
+
 ## License
 
 MIT
