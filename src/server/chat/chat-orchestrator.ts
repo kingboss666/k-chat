@@ -89,5 +89,5 @@ export async function* generateChatStream(userMessage: string) {
 
   chatMemory.push({ role: 'user', content: userMessage })
   chatMemory.push({ role: 'assistant', content: finalContent })
-  await persistLongTermMemory(longTermMemory, userMessage, finalContent)
+  await persistLongTermMemory(longTermMemory, userMessage)
 }
