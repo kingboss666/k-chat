@@ -1,5 +1,7 @@
 import { generateChatStream } from '@/src/server/chat/chat-orchestrator'
 
+export const runtime = 'nodejs'
+
 interface ChatRequestBody {
   message?: string
 }
@@ -63,6 +65,7 @@ export async function POST(req: Request) {
         'Content-Type': 'application/x-ndjson; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
         'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
       },
     })
   }

@@ -36,6 +36,24 @@ function useChatStream({
     return `${Date.now()}-${messageIdRef.current}`
   }, [])
 
+  const appendReasoningLine = useCallback((currentReasoning: string, nextLine: string) => {
+    const normalizedLine = nextLine.trim()
+    if (!normalizedLine) {
+      return currentReasoning
+    }
+
+    if (!currentReasoning.trim()) {
+      return normalizedLine
+    }
+
+    const existingLines = currentReasoning.split('\n').map(line => line.trim())
+    if (existingLines.includes(normalizedLine)) {
+      return currentReasoning
+    }
+
+    return `${currentReasoning}\n${normalizedLine}`
+  }, [])
+
   const sendMessage = useCallback(async () => {
     if (!canSubmit) {
       return
@@ -123,7 +141,7 @@ function useChatStream({
             assistantContent += event.content
           }
           if (event.type === 'reasoning' && event.content) {
-            reasoning = event.content
+            reasoning = appendReasoningLine(reasoning, event.content)
           }
           if (event.type === 'usage') {
             streamUsage = event.usage
@@ -269,6 +287,7 @@ function useChatStream({
     }
   }, [
     appendTokenUsageStat,
+    appendReasoningLine,
     canSubmit,
     createMessageId,
     estimateTokenCount,

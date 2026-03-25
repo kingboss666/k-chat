@@ -1,11 +1,14 @@
+import type { ChatWorkflowContext } from '@/src/lib/chat-workflow'
 import type { QianwenMessage } from '@/src/lib/qianwen'
-import { createChatWorkflow } from '@/src/lib/chat-workflow'
 import { LongTermMemory } from '@/src/lib/long-term-memory'
 import { SummaryMemory } from '@/src/lib/memory'
 import { buildRagPrompt } from '@/src/lib/prompt-builder'
-import { generateQianwenChatCompletion, generateQianwenEmbedding } from '@/src/lib/qianwen'
+import {
+  generateQianwenChatCompletion,
+  generateQianwenChatCompletionStream,
+  generateQianwenEmbedding,
+} from '@/src/lib/qianwen'
 import { LocalVectorStore } from '@/src/lib/vector-store'
-import { runWorkflow } from '@/src/lib/workflow-engine'
 import { CHAT_TOOLS, DEFAULT_RAG_TOP_K, EMPTY_USAGE, MAX_TOOL_ROUNDS } from './constants'
 import { persistLongTermMemory } from './memory-service'
 import { buildSystemPrompt, parseStructuredAssistantOutput, stripStructuredLabels } from './output-parser'
@@ -86,14 +89,39 @@ function buildReviewPrompt({
   return [
     '你是 Workflow Engine 中的 Review 步骤。',
     '请审查下面的回答是否准确、简洁，并优先遵循检索上下文。',
-    '如果原回答已经足够好，请只输出润色后的最终答案。',
-    '不要解释你的审查过程，不要输出标题。',
+    '请直接输出给用户的最终回答。',
+    '不要输出 Thought、Final Answer、标题或审查说明。',
     '',
     `用户问题：${userMessage}`,
     `执行摘要：\n${responseBrief}`,
     `检索上下文：\n${knowledgePrompt}`,
     `待审查回答：\n${draftAnswer}`,
   ].join('\n\n')
+}
+
+async function streamReviewedAnswer({
+  userMessage,
+  responseBrief,
+  draftAnswer,
+  knowledgePrompt,
+}: {
+  userMessage: string
+  responseBrief: string
+  draftAnswer: string
+  knowledgePrompt: string
+}) {
+  return generateQianwenChatCompletionStream({
+    messages: [{
+      role: 'user',
+      content: buildReviewPrompt({
+        userMessage,
+        responseBrief,
+        draftAnswer,
+        knowledgePrompt,
+      }),
+    }],
+    temperature: 0.1,
+  })
 }
 
 async function generateSummary(messages: Array<{ role: 'user' | 'assistant', content: string }>) {
@@ -215,6 +243,7 @@ async function generateAssistantDraft({
 // 编排层只关心“这次请求怎样被处理”，不关心 HTTP 细节。
 export async function* generateChatStream(userMessage: string) {
   if (chatMemory.shouldSummarize()) {
+    yield { type: 'reasoning', content: '执行步骤：更新历史摘要' }
     const toSummarize = chatMemory.getMessagesToSummarize()
     const newSummary = await generateSummary(toSummarize)
     chatMemory.setSummary(newSummary)
@@ -222,72 +251,7 @@ export async function* generateChatStream(userMessage: string) {
   }
 
   await longTermMemory.load()
-
-  const workflow = createChatWorkflow({
-    async search(context) {
-      const knowledgeContext = await buildKnowledgeContext(context.userMessage)
-      return {
-        knowledgeResults: knowledgeContext.results,
-        knowledgePrompt: knowledgeContext.prompt,
-      }
-    },
-    async summarize(context) {
-      const summaryPrompt = buildWorkflowSummaryPrompt({
-        userMessage: context.userMessage,
-        userContext: context.userContext,
-        conversationSummary: context.conversationSummary,
-        history: context.history,
-        knowledgePrompt: context.knowledgePrompt,
-      })
-
-      const completion = await generateQianwenChatCompletion({
-        messages: [{ role: 'user', content: summaryPrompt }],
-        temperature: 0.2,
-      })
-
-      return {
-        responseBrief: completion.content.trim(),
-      }
-    },
-    async generate(context) {
-      const result = await generateAssistantDraft({
-        userMessage: context.userMessage,
-        history: context.history,
-        summary: context.conversationSummary,
-        userContext: context.userContext,
-        knowledgePrompt: context.knowledgePrompt,
-        responseBrief: context.responseBrief,
-      })
-
-      return {
-        draftAnswer: result.answer,
-        usage: mergeUsage(context.usage, result.usage),
-      }
-    },
-    async review(context) {
-      const completion = await generateQianwenChatCompletion({
-        messages: [{
-          role: 'user',
-          content: buildReviewPrompt({
-            userMessage: context.userMessage,
-            responseBrief: context.responseBrief,
-            draftAnswer: context.draftAnswer,
-            knowledgePrompt: context.knowledgePrompt,
-          }),
-        }],
-        temperature: 0.1,
-      })
-
-      const finalAnswer = completion.content.trim() || context.draftAnswer
-
-      return {
-        finalAnswer,
-        usage: mergeUsage(context.usage, completion.usage),
-      }
-    },
-  })
-
-  const initialContext = {
+  const context: ChatWorkflowContext = {
     userMessage,
     history: chatMemory.getHistory(),
     conversationSummary: chatMemory.getSummary(),
@@ -300,20 +264,61 @@ export async function* generateChatStream(userMessage: string) {
     usage: EMPTY_USAGE,
   }
 
-  const stepEvents: string[] = []
-  const workflowResult = await runWorkflow(workflow, initialContext, {
-    onStepStart(step) {
-      stepEvents.push(`执行步骤：${step.name}`)
-    },
+  yield { type: 'reasoning', content: '执行步骤：RAG Search' }
+  const knowledgeContext = await buildKnowledgeContext(context.userMessage)
+  context.knowledgeResults = knowledgeContext.results
+  context.knowledgePrompt = knowledgeContext.prompt
+
+  yield { type: 'reasoning', content: '执行步骤：Summarize' }
+  const summaryPrompt = buildWorkflowSummaryPrompt({
+    userMessage: context.userMessage,
+    userContext: context.userContext,
+    conversationSummary: context.conversationSummary,
+    history: context.history,
+    knowledgePrompt: context.knowledgePrompt,
+  })
+  const summaryCompletion = await generateQianwenChatCompletion({
+    messages: [{ role: 'user', content: summaryPrompt }],
+    temperature: 0.2,
+  })
+  context.responseBrief = summaryCompletion.content.trim()
+  context.usage = mergeUsage(context.usage, summaryCompletion.usage)
+
+  yield { type: 'reasoning', content: '执行步骤：Generate Draft' }
+  const draftResult = await generateAssistantDraft({
+    userMessage: context.userMessage,
+    history: context.history,
+    summary: context.conversationSummary,
+    userContext: context.userContext,
+    knowledgePrompt: context.knowledgePrompt,
+    responseBrief: context.responseBrief,
+  })
+  context.draftAnswer = draftResult.answer
+  context.usage = mergeUsage(context.usage, draftResult.usage)
+
+  yield { type: 'reasoning', content: '执行步骤：Review & Stream' }
+  let streamedAnswer = ''
+
+  const reviewStream = await streamReviewedAnswer({
+    userMessage: context.userMessage,
+    responseBrief: context.responseBrief,
+    draftAnswer: context.draftAnswer,
+    knowledgePrompt: context.knowledgePrompt,
   })
 
-  for (const event of stepEvents) {
-    yield { type: 'reasoning', content: event }
+  for await (const event of reviewStream) {
+    if (event.type === 'text') {
+      streamedAnswer += event.content
+      yield { type: 'text', content: event.content }
+      continue
+    }
+
+    context.usage = mergeUsage(context.usage, event.result.usage)
+    context.finalAnswer = event.result.content.trim() || streamedAnswer.trim() || context.draftAnswer
   }
 
-  const finalContent = workflowResult.finalAnswer || workflowResult.draftAnswer
-  yield { type: 'text', content: finalContent }
-  yield { type: 'usage', usage: workflowResult.usage }
+  const finalContent = context.finalAnswer || streamedAnswer.trim() || context.draftAnswer
+  yield { type: 'usage', usage: context.usage }
 
   chatMemory.push({ role: 'user', content: userMessage })
   chatMemory.push({ role: 'assistant', content: finalContent })
