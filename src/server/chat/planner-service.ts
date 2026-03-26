@@ -49,6 +49,8 @@ function buildPlannerSystemPrompt() {
     '10. 遇到需要知识依据、文档、资料的问题时使用 RAG。',
     '11. 遇到写作类任务时，可以先检索资料，再提炼要点，再产出内容。',
     '12. parameters 必须可直接执行，禁止输出 TODO、占位符或“根据上下文自行决定”。',
+    '13. 如果提供了上一轮 Evaluator 反馈，你必须优先修正这些问题。',
+    '14. 如果提供了上一轮候选结果，你必须避免重复其中已经暴露的问题，必要时补充新的步骤。',
     '',
     '输出 schema:',
     '{"tasks":[{"id":"step_id","title":"步骤标题","tool":"RAG|LLM|TOOL","dependsOn":["prev_step"],"parameters":{}}]}',
@@ -71,11 +73,14 @@ function buildPlannerUserPrompt(
   const recentHistory = formatRecentHistory(context.history)
 
   return [
-    `用户问题：${context.userMessage}`,
+    `用户目标：${context.userMessage}`,
+    `当前轮次：第 ${context.iteration} / ${context.maxIterations} 轮`,
     context.userContext ? `用户长期记忆：\n${context.userContext}` : '',
     context.conversationSummary ? `历史摘要：\n${context.conversationSummary}` : '',
     recentHistory ? `最近对话：\n${recentHistory}` : '',
     planningKnowledgePreview ? `RAG 背景预览：\n${planningKnowledgePreview}` : '',
+    context.lastResult ? `上一轮候选结果：\n${context.lastResult}` : '',
+    context.feedback ? `上一轮失败原因与修正建议：\n${context.feedback}` : '',
     `可用工具目录：\n${formatToolCatalog()}`,
   ].filter(Boolean).join('\n\n')
 }

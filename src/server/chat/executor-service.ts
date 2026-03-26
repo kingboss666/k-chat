@@ -17,6 +17,10 @@ type ChatExecutionEvent
   = | { type: 'reasoning', content: string }
     | { type: 'text', content: string }
 
+interface ExecuteChatPlanOptions {
+  streamFinalAnswer?: boolean
+}
+
 type RagPlanTask = Extract<AgentPlanTask, { tool: 'RAG' }>
 type LlmPlanTask = Extract<AgentPlanTask, { tool: 'LLM' }>
 type ToolPlanTask = Extract<AgentPlanTask, { tool: 'TOOL' }>
@@ -256,11 +260,50 @@ async function* runFinalLlmTask(
   }
 }
 
+async function runBufferedFinalLlmTask(
+  task: LlmPlanTask,
+  context: ChatWorkflowContext,
+  results: Record<string, AgentTaskResult>,
+) {
+  const completion = await generateQianwenChatCompletion({
+    messages: [
+      {
+        role: 'system',
+        content: buildExecutorSystemPrompt(task, true),
+      },
+      {
+        role: 'user',
+        content: buildExecutorUserPrompt(task, context, results, true),
+      },
+    ],
+    temperature: task.parameters.temperature ?? 0.2,
+  })
+
+  const finalAnswer = completion.content.trim()
+
+  return {
+    context: {
+      ...context,
+      finalAnswer,
+      usage: mergeUsage(context.usage, completion.usage),
+    },
+    result: {
+      stepId: task.id,
+      title: task.title,
+      tool: task.tool,
+      value: finalAnswer,
+      summary: summarizeTaskValue(finalAnswer),
+      usage: completion.usage,
+    } satisfies AgentTaskResult,
+  }
+}
+
 async function* executeChatTask(
   task: AgentPlanTask,
   context: ChatWorkflowContext,
   results: Record<string, AgentTaskResult>,
   isFinalStep: boolean,
+  streamFinalAnswer: boolean,
 ): AsyncGenerator<ChatExecutionEvent, { context?: ChatWorkflowContext, result: AgentTaskResult }, void> {
   yield {
     type: 'reasoning',
@@ -276,6 +319,10 @@ async function* executeChatTask(
   }
 
   if (isFinalStep) {
+    if (!streamFinalAnswer) {
+      return await runBufferedFinalLlmTask(task, context, results)
+    }
+
     return yield * runFinalLlmTask(task, context, results)
   }
 
@@ -284,19 +331,21 @@ async function* executeChatTask(
 
 export async function* executeChatPlan(
   context: ChatWorkflowContext,
+  options: ExecuteChatPlanOptions = {},
 ): AsyncGenerator<ChatExecutionEvent, ChatWorkflowContext> {
   if (context.plannedTasks.length === 0) {
     return context
   }
 
   const finalTaskId = context.plannedTasks.at(-1)?.id
+  const streamFinalAnswer = options.streamFinalAnswer ?? true
   const workflow = runPlannedWorkflow(
     context.plannedTasks,
     {
       context,
       results: context.taskResults,
     },
-    (task, state) => executeChatTask(task, state.context, state.results, task.id === finalTaskId),
+    (task, state) => executeChatTask(task, state.context, state.results, task.id === finalTaskId, streamFinalAnswer),
   )
 
   const iterator = workflow[Symbol.asyncIterator]()

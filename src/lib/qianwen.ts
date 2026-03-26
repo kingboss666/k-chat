@@ -90,7 +90,7 @@ interface QianwenCompletionResponse {
 }
 
 const QIANWEN_API_URL = process.env.QIANWEN_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-const QIANWEN_MODEL = process.env.QIANWEN_MODEL ?? 'qwen-plus'
+const QIANWEN_MODEL = process.env.QIANWEN_MODEL ?? 'qwen-plus-2025-07-28'
 const QIANWEN_EMBEDDING_API_URL = process.env.QIANWEN_EMBEDDING_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings'
 const QIANWEN_EMBEDDING_MODEL = process.env.QIANWEN_EMBEDDING_MODEL ?? 'text-embedding-v4'
 

@@ -2,6 +2,7 @@ import type { QianwenToolDefinition } from '@/src/lib/qianwen'
 
 export const MAX_TOOL_ROUNDS = 4
 export const DEFAULT_RAG_TOP_K = 3
+export const MAX_CHAT_ITERATIONS = 3
 
 export const EMPTY_USAGE = {
   prompt: 0,

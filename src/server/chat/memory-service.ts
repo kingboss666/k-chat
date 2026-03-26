@@ -93,7 +93,7 @@ function hasLongTermMemoryUpdate(update: LongTermMemoryUpdate): boolean {
 function shouldExtractLongTermMemory(userMessage: string): boolean {
   return [
     /我叫/u,
-    /名字是/u,
+    /我的?名字是/u,
     /叫我/u,
     /我是(?:一名|个)?/u,
     /我在.{1,20}?(?:工作|上班)/u,
@@ -151,7 +151,7 @@ function extractLongTermMemoryByRules(userMessage: string): LongTermMemoryUpdate
 
   const namePatterns = [
     /我叫\s*([\p{Script=Han}A-Z][\p{Script=Han}\w-]{0,30})/iu,
-    /名字是\s*([\p{Script=Han}A-Z][\p{Script=Han}\w-]{0,30})/iu,
+    /我的?名字是\s*([\p{Script=Han}A-Z][\p{Script=Han}\w-]{0,30})/iu,
   ]
 
   for (const pattern of namePatterns) {
