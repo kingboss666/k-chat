@@ -47,6 +47,20 @@ K-Chat 的工作在开始实现前 MUST 先完成任务分类。
 - **WHEN** 创建工作流、评审、proposal 或 design 文档
 - **THEN** 文档必须放在 `openspec/` 或其他工程目录中，而不是 `docs/knowledge/`
 
+### Requirement: 功能知识必须沉淀到 OpenSpec Wiki
+
+新增功能和后续需求演进 MUST 在 `openspec/wiki/` 中保持可读、可追踪的说明。
+
+#### Scenario: 开发者交付一个新功能
+
+- **WHEN** 一项 `feature` 已完成实现
+- **THEN** `openspec/wiki/` 中必须存在对应主题文档，并说明新增或更新了什么功能以及涉及哪些关键文件
+
+#### Scenario: 开发者修复 BUG 或调整需求
+
+- **WHEN** 一项 `bugfix`、`behavior-change` 或需求调整影响了既有功能
+- **THEN** 对应的 wiki 文档必须同步更新，确保未来读者看到的是当前真实行为和相关文件
+
 ### Requirement: 交付完成必须有证据
 
 当 spec、代码和验证证据没有同时到位时，工作 MUST NOT 被视为完成。

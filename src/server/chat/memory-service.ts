@@ -1,5 +1,5 @@
 import type { LongTermMemory, UserProfile } from '@/src/lib/long-term-memory'
-import { generateQianwenChatCompletion } from '@/src/lib/qianwen'
+import { llm } from '@/src/lib/llm'
 
 interface LongTermMemoryUpdate {
   name?: string
@@ -226,6 +226,7 @@ function extractLongTermMemoryByRules(userMessage: string): LongTermMemoryUpdate
 export async function persistLongTermMemory(
   longTermMemory: LongTermMemory,
   userMessage: string,
+  model: string,
 ) {
   const currentProfile = longTermMemory.getProfile()
   let update = extractLongTermMemoryByRules(userMessage)
@@ -235,7 +236,8 @@ export async function persistLongTermMemory(
   }
 
   try {
-    const completion = await generateQianwenChatCompletion({
+    const completion = await llm.generate({
+      model,
       messages: [{
         role: 'user',
         content: buildLongTermMemoryPrompt(userMessage, JSON.stringify(currentProfile)),

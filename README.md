@@ -158,7 +158,10 @@ src/
     memory-service.ts             # 长期记忆提取与持久化
     iteration-log-service.ts      # 每轮执行日志
   lib/
-    qianwen.ts                    # Qwen 聊天 / 流式 / embedding 适配
+    llm/
+      index.ts                    # 统一 LLM 入口与模型注册
+      types.ts                    # Provider / 消息 / usage 通用类型
+    qianwen.ts                    # Qwen provider 与 embedding 适配
     agent-planning.ts             # 计划 schema 和解析
     workflow-engine.ts            # 通用工作流执行器
     memory.ts                     # 短期记忆和摘要记忆
@@ -174,6 +177,7 @@ openspec/
   specs/                          # 长期能力规格
   changes/                        # 行为变更提案和设计
   workflows/                      # 工程工作流说明
+  wiki/                           # 功能说明与维护知识沉淀
 ```
 
 ## 技术栈
@@ -198,18 +202,22 @@ pnpm install
 创建 `.env.local`：
 
 ```env
-QIANWEN_API_KEY=your_api_key_here
+QWEN_API_KEY=your_api_key_here
 
 # 可选
-QIANWEN_MODEL=qwen-plus-2025-07-28
-QIANWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
-QIANWEN_EMBEDDING_MODEL=text-embedding-v4
-QIANWEN_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings
+DEFAULT_CHAT_MODEL=qwen
+QWEN_MODEL=qwen-plus-2025-07-28
+QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+QWEN_EMBEDDING_MODEL=text-embedding-v4
+QWEN_EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings
 ```
 
 说明：
 
-- 如果没有配置 `QIANWEN_API_KEY`，项目会退化到本地 mock 模式，方便调试 UI 和编排流程
+- `llm.generate({ model: "qwen", messages })` 会通过统一 Provider 层路由到具体实现，当前默认映射到 Qwen
+- `DEFAULT_CHAT_MODEL` 支持 `qwen`、`qwen-plus`、`qwen-max`、`qwen-turbo`
+- 如果没有配置 `QWEN_API_KEY`，项目会退化到本地 mock 模式，方便调试 UI 和编排流程
+- 旧的 `QIANWEN_*` 环境变量仍兼容
 - 天气工具依赖外部天气服务，联网环境下才会返回真实结果
 
 ### 3. 启动开发环境
@@ -287,6 +295,7 @@ pnpm lint:css
 
 - `openspec/project.md`
 - `openspec/workflows/generator-evaluator.md`
+- `openspec/wiki/*`
 - `openspec/specs/*`
 - `openspec/changes/*`
 

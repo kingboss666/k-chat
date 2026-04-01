@@ -1,4 +1,5 @@
 import Chat from '@/src/components/Chat'
+import { DEFAULT_CHAT_MODEL } from '@/src/lib/llm'
 
 const HomePage: React.FC = () => {
   return (
@@ -7,7 +8,7 @@ const HomePage: React.FC = () => {
       <p className="mb-6 text-sm text-slate-600">
         基于 Next.js Route Handlers 的最小可运行聊天示例
       </p>
-      <Chat />
+      <Chat defaultModel={DEFAULT_CHAT_MODEL} />
     </main>
   )
 }

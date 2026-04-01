@@ -1,8 +1,8 @@
 import type { ChatWorkflowContext } from '@/src/lib/chat-workflow'
 import { randomUUID } from 'node:crypto'
+import { DEFAULT_CHAT_MODEL, llm } from '@/src/lib/llm'
 import { LongTermMemory } from '@/src/lib/long-term-memory'
 import { SummaryMemory } from '@/src/lib/memory'
-import { generateQianwenChatCompletion } from '@/src/lib/qianwen'
 import { EMPTY_USAGE, MAX_CHAT_ITERATIONS } from './constants'
 import { evaluateChatResult } from './evaluator-service'
 import { executeChatPlan, mergeUsage } from './executor-service'
@@ -18,7 +18,10 @@ import { planChatTasks } from './planner-service'
 const chatMemory = new SummaryMemory(6)
 const longTermMemory = new LongTermMemory()
 
-async function generateSummary(messages: Array<{ role: 'user' | 'assistant', content: string }>) {
+async function generateSummary(
+  messages: Array<{ role: 'user' | 'assistant', content: string }>,
+  model: string,
+) {
   const conversationText = messages
     .map(msg => `${msg.role}: ${msg.content}`)
     .join('\n')
@@ -30,7 +33,8 @@ ${conversationText}
 
 总结：`
 
-  const completion = await generateQianwenChatCompletion({
+  const completion = await llm.generate({
+    model,
     messages: [{ role: 'user', content: summaryPrompt }],
     temperature: 0.3,
   })
@@ -58,19 +62,20 @@ function splitTextIntoChunks(content: string, chunkSize = 96) {
 }
 
 // 编排层只关心“这次请求怎样被处理”，不关心 HTTP 细节。
-export async function* generateChatStream(userMessage: string) {
+export async function* generateChatStream(userMessage: string, model = DEFAULT_CHAT_MODEL) {
   const requestId = randomUUID()
 
   if (chatMemory.shouldSummarize()) {
     yield { type: 'reasoning', content: '执行步骤：更新历史摘要' }
     const toSummarize = chatMemory.getMessagesToSummarize()
-    const newSummary = await generateSummary(toSummarize)
+    const newSummary = await generateSummary(toSummarize, model)
     chatMemory.setSummary(newSummary)
     chatMemory.clearOldMessages()
   }
 
   await longTermMemory.load()
   let context: ChatWorkflowContext = {
+    model,
     userMessage,
     history: chatMemory.getHistory(),
     conversationSummary: chatMemory.getSummary(),
@@ -165,6 +170,7 @@ export async function* generateChatStream(userMessage: string) {
 
     const evaluationStartedAt = performance.now()
     const evaluationResult = await evaluateChatResult({
+      model: context.model,
       userGoal: userMessage,
       currentResult: finalContent,
     })
@@ -250,5 +256,5 @@ export async function* generateChatStream(userMessage: string) {
 
   chatMemory.push({ role: 'user', content: userMessage })
   chatMemory.push({ role: 'assistant', content: finalContent })
-  await persistLongTermMemory(longTermMemory, userMessage)
+  await persistLongTermMemory(longTermMemory, userMessage, context.model)
 }

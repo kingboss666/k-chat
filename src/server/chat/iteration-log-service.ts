@@ -1,6 +1,6 @@
 import type { AgentPlanTask, AgentTaskResult } from '@/src/lib/agent-planning'
 import type { ChatEvaluation } from '@/src/lib/chat-workflow'
-import type { QianwenUsage } from '@/src/lib/qianwen'
+import type { LLMUsage } from '@/src/lib/llm'
 import { appendFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { serializeAgentTaskValue } from '@/src/lib/agent-planning'
@@ -13,10 +13,10 @@ export interface ChatIterationLatencyLog {
 }
 
 export interface ChatIterationUsageLog {
-  planning: QianwenUsage
-  execution: QianwenUsage
-  evaluation: QianwenUsage
-  total: QianwenUsage
+  planning: LLMUsage
+  execution: LLMUsage
+  evaluation: LLMUsage
+  total: LLMUsage
 }
 
 export interface ChatIterationResultLog {
@@ -48,7 +48,7 @@ function roundMetric(value: number) {
   return Math.round(value * 10) / 10
 }
 
-export function cloneUsage(usage: QianwenUsage): QianwenUsage {
+export function cloneUsage(usage: LLMUsage): LLMUsage {
   return {
     prompt: usage.prompt,
     completion: usage.completion,
@@ -56,7 +56,7 @@ export function cloneUsage(usage: QianwenUsage): QianwenUsage {
   }
 }
 
-export function subtractUsage(after: QianwenUsage, before: QianwenUsage): QianwenUsage {
+export function subtractUsage(after: LLMUsage, before: LLMUsage): LLMUsage {
   return {
     prompt: Math.max(0, after.prompt - before.prompt),
     completion: Math.max(0, after.completion - before.completion),

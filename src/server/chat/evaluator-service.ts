@@ -1,6 +1,6 @@
 import type { ChatEvaluation } from '@/src/lib/chat-workflow'
 import { z } from 'zod'
-import { generateQianwenChatCompletion } from '@/src/lib/qianwen'
+import { llm } from '@/src/lib/llm'
 import { EMPTY_USAGE } from './constants'
 
 const ChatEvaluationSchema = z.object({
@@ -10,6 +10,7 @@ const ChatEvaluationSchema = z.object({
 })
 
 interface EvaluateChatResultParams {
+  model: string
   userGoal: string
   currentResult: string
 }
@@ -79,7 +80,8 @@ function buildFallbackEvaluation(currentResult: string): ChatEvaluation {
 
 export async function evaluateChatResult(params: EvaluateChatResultParams) {
   try {
-    const completion = await generateQianwenChatCompletion({
+    const completion = await llm.generate({
+      model: params.model,
       messages: [
         {
           role: 'system',

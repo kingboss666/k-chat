@@ -9,6 +9,7 @@ import { useCallback, useRef } from 'react'
 
 interface SendMessageArgs {
   inputValue: string
+  selectedModel: string
   canSubmit: boolean
   estimateTokenCount: (text: string) => number
   appendTokenUsageStat: (params: AppendTokenUsageParams) => void
@@ -20,6 +21,7 @@ interface SendMessageArgs {
 
 function useChatStream({
   inputValue,
+  selectedModel,
   canSubmit,
   estimateTokenCount,
   appendTokenUsageStat,
@@ -99,6 +101,7 @@ function useChatStream({
         },
         body: JSON.stringify({
           message: userMessage.content,
+          model: selectedModel,
         }),
         signal: abortController.signal,
       })
@@ -296,6 +299,7 @@ function useChatStream({
     onInputValueChange,
     onLoadingChange,
     onMessagesChange,
+    selectedModel,
   ])
 
   const abort = useCallback(() => {

@@ -1,7 +1,8 @@
 import type { AgentPlanTask } from '@/src/lib/agent-planning'
 import type { ChatWorkflowContext } from '@/src/lib/chat-workflow'
 import { parseAgentPlan } from '@/src/lib/agent-planning'
-import { generateQianwenChatCompletion, generateQianwenEmbedding } from '@/src/lib/qianwen'
+import { llm } from '@/src/lib/llm'
+import { generateQianwenEmbedding } from '@/src/lib/qianwen'
 import { LocalVectorStore } from '@/src/lib/vector-store'
 import { CHAT_TOOLS, DEFAULT_RAG_TOP_K, EMPTY_USAGE } from './constants'
 
@@ -259,7 +260,8 @@ export async function planChatTasks(context: ChatWorkflowContext) {
       console.error('Failed to build planner RAG preview:', error)
     }
 
-    const completion = await generateQianwenChatCompletion({
+    const completion = await llm.generate({
+      model: context.model,
       messages: [
         {
           role: 'system',

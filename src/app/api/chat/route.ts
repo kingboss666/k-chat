@@ -1,9 +1,12 @@
+import { DEFAULT_CHAT_MODEL } from '@/src/lib/llm'
+import { isSupportedChatModel } from '@/src/lib/llm/models'
 import { generateChatStream } from '@/src/server/chat/chat-orchestrator'
 
 export const runtime = 'nodejs'
 
 interface ChatRequestBody {
   message?: string
+  model?: string
 }
 
 function createInvalidRequestResponse() {
@@ -37,6 +40,8 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as ChatRequestBody
     const userMessage = body.message?.trim() ?? ''
+    const requestedModel = body.model?.trim() ?? ''
+    const selectedModel = isSupportedChatModel(requestedModel) ? requestedModel : DEFAULT_CHAT_MODEL
 
     if (userMessage.length === 0) {
       return createInvalidRequestResponse()
@@ -46,7 +51,7 @@ export async function POST(req: Request) {
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          for await (const event of generateChatStream(userMessage)) {
+          for await (const event of generateChatStream(userMessage, selectedModel)) {
             controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
           }
           controller.close()

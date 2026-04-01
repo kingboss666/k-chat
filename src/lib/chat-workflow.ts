@@ -1,5 +1,5 @@
 import type { AgentPlanTask, AgentTaskResult } from '@/src/lib/agent-planning'
-import type { QianwenUsage } from '@/src/lib/qianwen'
+import type { LLMUsage } from '@/src/lib/llm'
 import type { VectorSearchResult } from '@/src/lib/vector-store'
 
 export interface ChatEvaluation {
@@ -9,6 +9,7 @@ export interface ChatEvaluation {
 }
 
 export interface ChatWorkflowContext {
+  model: string
   userMessage: string
   history: Array<{ role: 'user' | 'assistant', content: string }>
   conversationSummary: string
@@ -23,5 +24,5 @@ export interface ChatWorkflowContext {
   knowledgePrompt: string
   finalAnswer: string
   evaluations: ChatEvaluation[]
-  usage: QianwenUsage
+  usage: LLMUsage
 }

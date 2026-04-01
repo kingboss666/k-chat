@@ -1,4 +1,4 @@
-import type { QianwenToolDefinition } from '@/src/lib/qianwen'
+import type { LLMToolDefinition } from '@/src/lib/llm'
 
 export const MAX_TOOL_ROUNDS = 4
 export const DEFAULT_RAG_TOP_K = 3
@@ -11,7 +11,7 @@ export const EMPTY_USAGE = {
 }
 
 // 聊天场景当前支持的工具定义，后续扩展工具时优先在这里集中维护。
-export const CHAT_TOOLS: QianwenToolDefinition[] = [
+export const CHAT_TOOLS: LLMToolDefinition[] = [
   {
     type: 'function',
     function: {

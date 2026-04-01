@@ -1,4 +1,4 @@
-import type { QianwenToolCall } from '@/src/lib/qianwen'
+import type { LLMToolCall } from '@/src/lib/llm'
 import { z } from 'zod'
 
 const TimeToolSchema = z.object({
@@ -279,7 +279,7 @@ async function resolveWeather(rawArguments: string) {
 }
 
 // 工具执行器是工作流里的基础设施层，负责把模型工具调用路由到具体实现。
-export async function executeToolCall(toolCall: QianwenToolCall) {
+export async function executeToolCall(toolCall: LLMToolCall) {
   try {
     if (toolCall.function.name === 'get_weather') {
       return await resolveWeather(toolCall.function.arguments)

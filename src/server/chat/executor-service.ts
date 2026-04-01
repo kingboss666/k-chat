@@ -1,13 +1,10 @@
 import type { AgentPlanTask, AgentTaskResult } from '@/src/lib/agent-planning'
 import type { ChatWorkflowContext } from '@/src/lib/chat-workflow'
-import type { QianwenToolCall, QianwenUsage } from '@/src/lib/qianwen'
+import type { LLMToolCall, LLMUsage } from '@/src/lib/llm'
 import { serializeAgentTaskValue } from '@/src/lib/agent-planning'
+import { llm } from '@/src/lib/llm'
 import { buildRagPrompt } from '@/src/lib/prompt-builder'
-import {
-  generateQianwenChatCompletion,
-  generateQianwenChatCompletionStream,
-  generateQianwenEmbedding,
-} from '@/src/lib/qianwen'
+import { generateQianwenEmbedding } from '@/src/lib/qianwen'
 import { LocalVectorStore } from '@/src/lib/vector-store'
 import { runPlannedWorkflow } from '@/src/lib/workflow-engine'
 import { DEFAULT_RAG_TOP_K, EMPTY_USAGE } from './constants'
@@ -141,7 +138,7 @@ async function runRagTask(task: RagPlanTask, context: ChatWorkflowContext) {
 }
 
 async function runToolTask(task: ToolPlanTask) {
-  const toolCall: QianwenToolCall = {
+  const toolCall: LLMToolCall = {
     id: `planned-tool-${task.id}`,
     type: 'function',
     function: {
@@ -168,7 +165,8 @@ async function runSingleLlmTask(
   context: ChatWorkflowContext,
   results: Record<string, AgentTaskResult>,
 ) {
-  const completion = await generateQianwenChatCompletion({
+  const completion = await llm.generate({
+    model: context.model,
     messages: [
       {
         role: 'system',
@@ -200,7 +198,7 @@ async function runSingleLlmTask(
   }
 }
 
-export function mergeUsage(left: QianwenUsage, right: QianwenUsage) {
+export function mergeUsage(left: LLMUsage, right: LLMUsage) {
   return {
     prompt: left.prompt + right.prompt,
     completion: left.completion + right.completion,
@@ -213,7 +211,8 @@ async function* runFinalLlmTask(
   context: ChatWorkflowContext,
   results: Record<string, AgentTaskResult>,
 ): AsyncGenerator<ChatExecutionEvent, { context: ChatWorkflowContext, result: AgentTaskResult }, void> {
-  const stream = await generateQianwenChatCompletionStream({
+  const stream = llm.generateStream({
+    model: context.model,
     messages: [
       {
         role: 'system',
@@ -265,7 +264,8 @@ async function runBufferedFinalLlmTask(
   context: ChatWorkflowContext,
   results: Record<string, AgentTaskResult>,
 ) {
-  const completion = await generateQianwenChatCompletion({
+  const completion = await llm.generate({
+    model: context.model,
     messages: [
       {
         role: 'system',

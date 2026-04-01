@@ -1,56 +1,17 @@
-export interface QianwenToolCall {
-  id: string
-  type: 'function'
-  function: {
-    name: string
-    arguments: string
-  }
-}
-
-export interface QianwenToolDefinition {
-  type: 'function'
-  function: {
-    name: string
-    description: string
-    parameters: Record<string, unknown>
-  }
-}
-
-export interface QianwenMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string | null
-  name?: string
-  tool_call_id?: string
-  tool_calls?: QianwenToolCall[]
-}
-
-export interface GenerateQianwenChatCompletionParams {
-  messages: QianwenMessage[]
-  tools?: QianwenToolDefinition[]
-  temperature?: number
-}
+import type {
+  GenerateLLMProviderParams,
+  LLMMessage,
+  LLMProvider,
+  LLMStreamEvent,
+  LLMToolCall,
+  LLMToolDefinition,
+  LLMUsage,
+} from '@/src/lib/llm/types'
 
 export interface GenerateQianwenEmbeddingResult {
   vector: number[]
   latency: number
 }
-
-export interface QianwenUsage {
-  prompt: number
-  completion: number
-  total: number
-}
-
-export interface GenerateQianwenChatCompletionResult {
-  content: string
-  toolCalls: QianwenToolCall[]
-  usage: QianwenUsage
-  latency: number
-}
-
-export type GenerateQianwenChatCompletionStreamEvent
-  = | { type: 'text', content: string }
-    | { type: 'done', result: GenerateQianwenChatCompletionResult }
 
 interface QianwenStreamChunk {
   choices?: Array<{
@@ -79,7 +40,7 @@ interface QianwenCompletionResponse {
   choices?: Array<{
     message?: {
       content?: string | null
-      tool_calls?: QianwenToolCall[]
+      tool_calls?: LLMToolCall[]
     }
   }>
   usage?: {
@@ -89,18 +50,17 @@ interface QianwenCompletionResponse {
   }
 }
 
-const QIANWEN_API_URL = process.env.QIANWEN_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-const QIANWEN_MODEL = process.env.QIANWEN_MODEL ?? 'qwen-plus-2025-07-28'
-const QIANWEN_EMBEDDING_API_URL = process.env.QIANWEN_EMBEDDING_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings'
-const QIANWEN_EMBEDDING_MODEL = process.env.QIANWEN_EMBEDDING_MODEL ?? 'text-embedding-v4'
+const QWEN_API_URL = process.env.QWEN_BASE_URL ?? process.env.QIANWEN_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+const QWEN_EMBEDDING_API_URL = process.env.QWEN_EMBEDDING_BASE_URL ?? process.env.QIANWEN_EMBEDDING_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings'
+const QWEN_EMBEDDING_MODEL = process.env.QWEN_EMBEDDING_MODEL ?? process.env.QIANWEN_EMBEDDING_MODEL ?? 'text-embedding-v4'
 
-const EMPTY_USAGE: QianwenUsage = {
+const EMPTY_USAGE: LLMUsage = {
   prompt: 0,
   completion: 0,
   total: 0,
 }
 
-function createEmptyToolCall(index: number): QianwenToolCall {
+function createEmptyToolCall(index: number): LLMToolCall {
   return {
     id: `stream-tool-call-${index}`,
     type: 'function',
@@ -122,7 +82,7 @@ function createMockEmbedding(text: string) {
 
 function normalizeQianwenUsage(
   payloadUsage?: QianwenStreamChunk['usage'] | QianwenCompletionResponse['usage'],
-): QianwenUsage | null {
+): LLMUsage | null {
   if (!payloadUsage) {
     return null
   }
@@ -138,7 +98,7 @@ function normalizeQianwenUsage(
   }
 }
 
-function buildMockToolSummary(message: QianwenMessage) {
+function buildMockToolSummary(message: LLMMessage) {
   let parsedContent: unknown = null
 
   try {
@@ -182,7 +142,7 @@ function buildMockToolSummary(message: QianwenMessage) {
   return '工具已执行完成。'
 }
 
-function inferMockToolCall(messages: QianwenMessage[], tools?: QianwenToolDefinition[]) {
+function inferMockToolCall(messages: LLMMessage[], tools?: LLMToolDefinition[]) {
   const toolNames = new Set((tools ?? []).map(item => item.function.name))
   const lastUserMessage = [...messages].reverse().find(item => item.role === 'user')?.content?.trim() ?? ''
 
@@ -234,10 +194,10 @@ function inferMockToolCall(messages: QianwenMessage[], tools?: QianwenToolDefini
   return null
 }
 
-function createMockQianwenCompletion({
+function createMockQwenCompletion({
   messages,
   tools,
-}: GenerateQianwenChatCompletionParams): GenerateQianwenChatCompletionResult {
+}: GenerateLLMProviderParams) {
   const lastToolMessage = [...messages].reverse().find(item => item.role === 'tool')
 
   if (lastToolMessage) {
@@ -246,6 +206,7 @@ function createMockQianwenCompletion({
       toolCalls: [],
       usage: EMPTY_USAGE,
       latency: 0,
+      provider: 'qwen' as const,
     }
   }
 
@@ -256,6 +217,7 @@ function createMockQianwenCompletion({
       toolCalls: [inferredToolCall],
       usage: EMPTY_USAGE,
       latency: 0,
+      provider: 'qwen' as const,
     }
   }
 
@@ -266,169 +228,192 @@ function createMockQianwenCompletion({
     toolCalls: [],
     usage: EMPTY_USAGE,
     latency: 0,
+    provider: 'qwen' as const,
   }
 }
 
-export async function generateQianwenChatCompletion({
-  messages,
-  tools,
-  temperature = 0.2,
-}: GenerateQianwenChatCompletionParams): Promise<GenerateQianwenChatCompletionResult> {
-  const apiKey = process.env.QIANWEN_API_KEY
+export const qwenProvider: LLMProvider = {
+  async generate({
+    providerModel,
+    messages,
+    tools,
+    temperature = 0.2,
+  }) {
+    const apiKey = process.env.QWEN_API_KEY ?? process.env.QIANWEN_API_KEY
 
-  if (!apiKey) {
-    return createMockQianwenCompletion({ messages, tools, temperature })
-  }
-
-  const startedAt = performance.now()
-  const response = await fetch(QIANWEN_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: QIANWEN_MODEL,
-      messages,
-      tools,
-      tool_choice: tools?.length ? 'auto' : undefined,
-      temperature,
-      stream: false,
-    }),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`QIANWEN_ERROR: ${response.status} ${errorText}`)
-  }
-
-  const payload = (await response.json()) as QianwenCompletionResponse
-  const message = payload.choices?.[0]?.message
-  const usage = normalizeQianwenUsage(payload.usage) ?? EMPTY_USAGE
-
-  return {
-    content: message?.content ?? '',
-    toolCalls: message?.tool_calls ?? [],
-    usage,
-    latency: performance.now() - startedAt,
-  }
-}
-
-export async function* generateQianwenChatCompletionStream({
-  messages,
-  tools,
-  temperature = 0.2,
-}: GenerateQianwenChatCompletionParams): AsyncGenerator<GenerateQianwenChatCompletionStreamEvent> {
-  const apiKey = process.env.QIANWEN_API_KEY
-
-  if (!apiKey) {
-    const mockCompletion = createMockQianwenCompletion({ messages, tools, temperature })
-
-    if (mockCompletion.toolCalls.length === 0) {
-      for (const char of mockCompletion.content) {
-        yield { type: 'text', content: char }
-      }
+    if (!apiKey) {
+      return createMockQwenCompletion({ providerModel, messages, tools, temperature })
     }
 
-    yield {
-      type: 'done',
-      result: mockCompletion,
-    }
-    return
-  }
-
-  const startedAt = performance.now()
-  const response = await fetch(QIANWEN_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: QIANWEN_MODEL,
-      messages,
-      tools,
-      tool_choice: tools?.length ? 'auto' : undefined,
-      temperature,
-      stream: true,
-      stream_options: {
-        include_usage: true,
+    const startedAt = performance.now()
+    const response = await fetch(QWEN_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
       },
-    }),
-  })
+      body: JSON.stringify({
+        model: providerModel,
+        messages,
+        tools,
+        tool_choice: tools?.length ? 'auto' : undefined,
+        temperature,
+        stream: false,
+      }),
+    })
 
-  if (!response.ok || !response.body) {
-    const errorText = await response.text()
-    throw new Error(`QIANWEN_ERROR: ${response.status} ${errorText}`)
-  }
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`QIANWEN_ERROR: ${response.status} ${errorText}`)
+    }
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let content = ''
-  const usage = { ...EMPTY_USAGE }
-  const toolCalls: QianwenToolCall[] = []
+    const payload = (await response.json()) as QianwenCompletionResponse
+    const message = payload.choices?.[0]?.message
+    const usage = normalizeQianwenUsage(payload.usage) ?? EMPTY_USAGE
 
-  function* handlePayload(payload: string): Generator<GenerateQianwenChatCompletionStreamEvent> {
-    if (!payload || payload === '[DONE]') {
+    return {
+      content: message?.content ?? '',
+      toolCalls: message?.tool_calls ?? [],
+      usage,
+      latency: performance.now() - startedAt,
+      provider: 'qwen' as const,
+    }
+  },
+
+  async *generateStream({
+    providerModel,
+    messages,
+    tools,
+    temperature = 0.2,
+  }): AsyncGenerator<LLMStreamEvent> {
+    const apiKey = process.env.QWEN_API_KEY ?? process.env.QIANWEN_API_KEY
+
+    if (!apiKey) {
+      const mockCompletion = createMockQwenCompletion({ providerModel, messages, tools, temperature })
+
+      if (mockCompletion.toolCalls.length === 0) {
+        for (const char of mockCompletion.content) {
+          yield { type: 'text', content: char }
+        }
+      }
+
+      yield {
+        type: 'done',
+        result: mockCompletion,
+      }
       return
     }
 
-    const chunk = JSON.parse(payload) as QianwenStreamChunk
-    const chunkUsage = normalizeQianwenUsage(chunk.usage)
+    const startedAt = performance.now()
+    const response = await fetch(QWEN_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: providerModel,
+        messages,
+        tools,
+        tool_choice: tools?.length ? 'auto' : undefined,
+        temperature,
+        stream: true,
+        stream_options: {
+          include_usage: true,
+        },
+      }),
+    })
 
-    if (chunkUsage) {
-      usage.prompt = chunkUsage.prompt
-      usage.completion = chunkUsage.completion
-      usage.total = chunkUsage.total
+    if (!response.ok || !response.body) {
+      const errorText = await response.text()
+      throw new Error(`QIANWEN_ERROR: ${response.status} ${errorText}`)
     }
 
-    for (const choice of chunk.choices ?? []) {
-      const delta = choice.delta
-      const deltaContent = delta?.content ?? ''
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let content = ''
+    const usage = { ...EMPTY_USAGE }
+    const toolCalls: LLMToolCall[] = []
 
-      if (deltaContent) {
-        content += deltaContent
-        yield { type: 'text', content: deltaContent }
+    function *handlePayload(payload: string): Generator<LLMStreamEvent> {
+      if (!payload || payload === '[DONE]') {
+        return
       }
 
-      for (const partialToolCall of delta?.tool_calls ?? []) {
-        const targetIndex = partialToolCall.index
-        const existingToolCall = toolCalls[targetIndex] ?? createEmptyToolCall(targetIndex)
+      const chunk = JSON.parse(payload) as QianwenStreamChunk
+      const chunkUsage = normalizeQianwenUsage(chunk.usage)
 
-        if (partialToolCall.id) {
-          existingToolCall.id = partialToolCall.id
+      if (chunkUsage) {
+        usage.prompt = chunkUsage.prompt
+        usage.completion = chunkUsage.completion
+        usage.total = chunkUsage.total
+      }
+
+      for (const choice of chunk.choices ?? []) {
+        const delta = choice.delta
+        const deltaContent = delta?.content ?? ''
+
+        if (deltaContent) {
+          content += deltaContent
+          yield { type: 'text', content: deltaContent }
         }
 
-        if (partialToolCall.type) {
-          existingToolCall.type = partialToolCall.type
-        }
+        for (const partialToolCall of delta?.tool_calls ?? []) {
+          const targetIndex = partialToolCall.index
+          const existingToolCall = toolCalls[targetIndex] ?? createEmptyToolCall(targetIndex)
 
-        if (partialToolCall.function?.name) {
-          existingToolCall.function.name += partialToolCall.function.name
-        }
+          if (partialToolCall.id) {
+            existingToolCall.id = partialToolCall.id
+          }
 
-        if (partialToolCall.function?.arguments) {
-          existingToolCall.function.arguments += partialToolCall.function.arguments
-        }
+          if (partialToolCall.type) {
+            existingToolCall.type = partialToolCall.type
+          }
 
-        toolCalls[targetIndex] = existingToolCall
+          if (partialToolCall.function?.name) {
+            existingToolCall.function.name += partialToolCall.function.name
+          }
+
+          if (partialToolCall.function?.arguments) {
+            existingToolCall.function.arguments += partialToolCall.function.arguments
+          }
+
+          toolCalls[targetIndex] = existingToolCall
+        }
       }
     }
-  }
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) {
-      buffer += decoder.decode()
-      break
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        buffer += decoder.decode()
+        break
+      }
+
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+
+      for (const frame of frames) {
+        const dataLines = frame
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trim())
+
+        for (const dataLine of dataLines) {
+          yield * handlePayload(dataLine)
+        }
+      }
     }
 
-    buffer += decoder.decode(value, { stream: true })
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
+    const trailingFrames = buffer
+      .split('\n\n')
+      .map(frame => frame.trim())
+      .filter(Boolean)
 
-    for (const frame of frames) {
+    for (const frame of trailingFrames) {
       const dataLines = frame
         .split('\n')
         .map(line => line.trim())
@@ -439,38 +424,22 @@ export async function* generateQianwenChatCompletionStream({
         yield * handlePayload(dataLine)
       }
     }
-  }
 
-  const trailingFrames = buffer
-    .split('\n\n')
-    .map(frame => frame.trim())
-    .filter(Boolean)
-
-  for (const frame of trailingFrames) {
-    const dataLines = frame
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.startsWith('data:'))
-      .map(line => line.slice(5).trim())
-
-    for (const dataLine of dataLines) {
-      yield * handlePayload(dataLine)
+    yield {
+      type: 'done',
+      result: {
+        content,
+        toolCalls: toolCalls.filter(toolCall => toolCall.function.name),
+        usage,
+        latency: performance.now() - startedAt,
+        provider: 'qwen',
+      },
     }
-  }
-
-  yield {
-    type: 'done',
-    result: {
-      content,
-      toolCalls: toolCalls.filter(toolCall => toolCall.function.name),
-      usage,
-      latency: performance.now() - startedAt,
-    },
-  }
+  },
 }
 
 export async function generateQianwenEmbedding(text: string): Promise<GenerateQianwenEmbeddingResult> {
-  const apiKey = process.env.QIANWEN_API_KEY
+  const apiKey = process.env.QWEN_API_KEY ?? process.env.QIANWEN_API_KEY
 
   if (!apiKey) {
     return {
@@ -480,14 +449,14 @@ export async function generateQianwenEmbedding(text: string): Promise<GenerateQi
   }
 
   const startedAt = performance.now()
-  const response = await fetch(QIANWEN_EMBEDDING_API_URL, {
+  const response = await fetch(QWEN_EMBEDDING_API_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: QIANWEN_EMBEDDING_MODEL,
+      model: QWEN_EMBEDDING_MODEL,
       input: text,
       encoding_format: 'float',
     }),

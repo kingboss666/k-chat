@@ -1,4 +1,4 @@
-import type { QianwenUsage } from '@/src/lib/qianwen'
+import type { LLMUsage } from '@/src/lib/llm'
 import { z } from 'zod'
 
 const TaskIdSchema = z.string().trim().regex(/^[a-z][a-z0-9_-]{1,63}$/)
@@ -56,7 +56,7 @@ export interface AgentTaskResult {
   tool: AgentPlanningTool
   value: unknown
   summary: string
-  usage?: QianwenUsage
+  usage?: LLMUsage
 }
 
 function extractJsonObject(content: string) {
