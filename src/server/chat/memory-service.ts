@@ -1,5 +1,6 @@
 import type { LongTermMemory, UserProfile } from '@/src/lib/long-term-memory'
 import { llm } from '@/src/lib/llm'
+import { buildPrompt } from '@/src/lib/prompt-builder'
 
 interface LongTermMemoryUpdate {
   name?: string
@@ -7,23 +8,6 @@ interface LongTermMemoryUpdate {
   interests?: string[]
   preferences?: Record<string, string>
   facts?: string[]
-}
-
-function buildLongTermMemoryPrompt(userMessage: string, currentProfile: string) {
-  return [
-    '请只根据用户消息，提取适合写入长期记忆的稳定用户信息。',
-    '只记录跨会话仍然有价值的信息，例如用户身份、职业、长期兴趣、稳定偏好、背景事实。',
-    '不要记录临时问题、一次性任务、当前时间、天气、短期计划。',
-    '不要记录当前正在讨论的文章、故事、文档、示例、角色设定、虚构世界观，除非用户明确说那是他自己的真实信息。',
-    '不要根据助手回复补充或猜测用户信息。',
-    '返回 JSON，对象字段只能是 profession、interests、preferences。',
-    'profession 用字符串；interests 用字符串数组；preferences 用 key-value 对象。',
-    '如果没有新增信息，返回空对象 {}。',
-    '不要输出 Markdown 代码块，不要额外解释。',
-    '',
-    `当前长期记忆：${currentProfile}`,
-    `用户消息：${userMessage}`,
-  ].join('\n')
 }
 
 function parseJsonObject<T>(content: string): T | null {
@@ -238,10 +222,11 @@ export async function persistLongTermMemory(
   try {
     const completion = await llm.generate({
       model,
-      messages: [{
-        role: 'user',
-        content: buildLongTermMemoryPrompt(userMessage, JSON.stringify(currentProfile)),
-      }],
+      messages: buildPrompt({
+        role: 'longTermMemory',
+        currentProfile: JSON.stringify(currentProfile),
+        userMessage,
+      }),
       temperature: 0,
     })
 

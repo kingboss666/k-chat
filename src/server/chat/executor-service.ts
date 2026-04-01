@@ -3,11 +3,12 @@ import type { ChatWorkflowContext } from '@/src/lib/chat-workflow'
 import type { LLMToolCall, LLMUsage } from '@/src/lib/llm'
 import { serializeAgentTaskValue } from '@/src/lib/agent-planning'
 import { llm } from '@/src/lib/llm'
-import { buildRagPrompt } from '@/src/lib/prompt-builder'
+import { buildPrompt, buildPromptBlock, buildRagPrompt } from '@/src/lib/prompt-builder'
 import { generateQianwenEmbedding } from '@/src/lib/qianwen'
 import { LocalVectorStore } from '@/src/lib/vector-store'
 import { runPlannedWorkflow } from '@/src/lib/workflow-engine'
 import { DEFAULT_RAG_TOP_K, EMPTY_USAGE } from './constants'
+import { cloneUsage, subtractUsage } from './iteration-log-service'
 import { executeToolCall } from './tool-service'
 
 type ChatExecutionEvent
@@ -16,6 +17,12 @@ type ChatExecutionEvent
 
 interface ExecuteChatPlanOptions {
   streamFinalAnswer?: boolean
+}
+
+export interface ChatPlanExecutionResult {
+  state: ChatWorkflowContext
+  results: Record<string, AgentTaskResult>
+  usage: LLMUsage
 }
 
 type RagPlanTask = Extract<AgentPlanTask, { tool: 'RAG' }>
@@ -58,39 +65,29 @@ function formatDependencyResults(task: AgentPlanTask, results: Record<string, Ag
     .join('\n\n')
 }
 
-function buildExecutorSystemPrompt(task: LlmPlanTask, isFinalStep: boolean) {
-  return [
-    '你是 Executor Agent，负责执行当前单个任务步骤。',
-    '只根据提供的用户问题、上下文和前置结果完成当前步骤。',
-    '如果缺少必要信息，要明确说明限制，不要编造。',
-    isFinalStep
-      ? '你当前执行的是最终输出步骤，直接给用户结果，不要解释 Planner/Executor 机制。'
-      : '你当前执行的是中间步骤，只产出当前步骤结果本身。',
-    task.parameters.systemPrompt ?? '',
-  ].filter(Boolean).join('\n')
-}
-
-function buildExecutorUserPrompt(
+function buildExecutorMessages(
   task: LlmPlanTask,
   context: ChatWorkflowContext,
   results: Record<string, AgentTaskResult>,
   isFinalStep: boolean,
 ) {
-  const recentHistory = formatRecentHistory(context.history)
-  const dependencyResults = formatDependencyResults(task, results)
-
-  return [
-    `当前步骤：${task.title}`,
-    `原始用户问题：${context.userMessage}`,
-    context.userContext ? `用户长期记忆：\n${context.userContext}` : '',
-    context.conversationSummary ? `历史摘要：\n${context.conversationSummary}` : '',
-    recentHistory ? `最近对话：\n${recentHistory}` : '',
-    dependencyResults ? `前置步骤结果：\n${dependencyResults}` : '',
-    `执行要求：\n${task.parameters.prompt}`,
-    isFinalStep
+  return buildPrompt({
+    role: 'executor',
+    taskTitle: task.title,
+    userMessage: context.userMessage,
+    memory: buildPromptBlock('用户长期记忆：', context.userContext),
+    conversationSummary: buildPromptBlock('历史摘要：', context.conversationSummary),
+    recentHistory: buildPromptBlock('最近对话：', formatRecentHistory(context.history)),
+    dependencyResults: buildPromptBlock('前置步骤结果：', formatDependencyResults(task, results)),
+    taskPrompt: task.parameters.prompt,
+    systemPrompt: task.parameters.systemPrompt ?? '',
+    executionModeInstruction: isFinalStep
+      ? '你当前执行的是最终输出步骤，直接给用户结果，不要解释 Planner/Executor 机制。'
+      : '你当前执行的是中间步骤，只产出当前步骤结果本身。',
+    outputConstraint: isFinalStep
       ? '直接输出给用户的最终结果，不要输出 JSON、步骤说明或多余前缀。'
       : '直接输出当前步骤结果，不要输出 JSON、步骤说明或多余前缀。',
-  ].filter(Boolean).join('\n\n')
+  })
 }
 
 function summarizeTaskValue(value: unknown) {
@@ -167,16 +164,7 @@ async function runSingleLlmTask(
 ) {
   const completion = await llm.generate({
     model: context.model,
-    messages: [
-      {
-        role: 'system',
-        content: buildExecutorSystemPrompt(task, false),
-      },
-      {
-        role: 'user',
-        content: buildExecutorUserPrompt(task, context, results, false),
-      },
-    ],
+    messages: buildExecutorMessages(task, context, results, false),
     temperature: task.parameters.temperature ?? 0.2,
   })
 
@@ -213,16 +201,7 @@ async function* runFinalLlmTask(
 ): AsyncGenerator<ChatExecutionEvent, { context: ChatWorkflowContext, result: AgentTaskResult }, void> {
   const stream = llm.generateStream({
     model: context.model,
-    messages: [
-      {
-        role: 'system',
-        content: buildExecutorSystemPrompt(task, true),
-      },
-      {
-        role: 'user',
-        content: buildExecutorUserPrompt(task, context, results, true),
-      },
-    ],
+    messages: buildExecutorMessages(task, context, results, true),
     temperature: task.parameters.temperature ?? 0.2,
   })
 
@@ -266,16 +245,7 @@ async function runBufferedFinalLlmTask(
 ) {
   const completion = await llm.generate({
     model: context.model,
-    messages: [
-      {
-        role: 'system',
-        content: buildExecutorSystemPrompt(task, true),
-      },
-      {
-        role: 'user',
-        content: buildExecutorUserPrompt(task, context, results, true),
-      },
-    ],
+    messages: buildExecutorMessages(task, context, results, true),
     temperature: task.parameters.temperature ?? 0.2,
   })
 
@@ -332,11 +302,16 @@ async function* executeChatTask(
 export async function* executeChatPlan(
   context: ChatWorkflowContext,
   options: ExecuteChatPlanOptions = {},
-): AsyncGenerator<ChatExecutionEvent, ChatWorkflowContext> {
+): AsyncGenerator<ChatExecutionEvent, ChatPlanExecutionResult> {
   if (context.plannedTasks.length === 0) {
-    return context
+    return {
+      state: context,
+      results: context.taskResults,
+      usage: cloneUsage(EMPTY_USAGE),
+    }
   }
 
+  const usageBaseline = cloneUsage(context.usage)
   const finalTaskId = context.plannedTasks.at(-1)?.id
   const streamFinalAnswer = options.streamFinalAnswer ?? true
   const workflow = runPlannedWorkflow(
@@ -368,11 +343,21 @@ export async function* executeChatPlan(
   }
 
   if (!finalState) {
-    return context
+    return {
+      state: context,
+      results: context.taskResults,
+      usage: cloneUsage(EMPTY_USAGE),
+    }
+  }
+
+  const nextState = {
+    ...finalState.context,
+    taskResults: finalState.results,
   }
 
   return {
-    ...finalState.context,
-    taskResults: finalState.results,
+    state: nextState,
+    results: finalState.results,
+    usage: subtractUsage(nextState.usage, usageBaseline),
   }
 }

@@ -1,6 +1,7 @@
 import type { ChatEvaluation } from '@/src/lib/chat-workflow'
 import { z } from 'zod'
 import { llm } from '@/src/lib/llm'
+import { buildPrompt } from '@/src/lib/prompt-builder'
 import { EMPTY_USAGE } from './constants'
 
 const ChatEvaluationSchema = z.object({
@@ -36,28 +37,6 @@ function extractJsonObject(content: string) {
   return normalized
 }
 
-function buildEvaluatorSystemPrompt() {
-  return [
-    '你是 Evaluator Agent。',
-    '你的职责是独立判断 currentResult 是否已经满足 userGoal。',
-    '不要重写答案，不要补做实现，只做判断。',
-    '如果 currentResult 已经直接、完整、准确地回应了 userGoal，则 success=true。',
-    '如果仍然存在遗漏、偏题、信息不足或表达不清，则 success=false。',
-    '当 success=false 时，nextAction 必须给出下一轮 Planner/Executor 可以直接执行的修正方向。',
-    '当 success=true 时，nextAction 保持空字符串即可。',
-    '必须输出 JSON，不允许额外解释。',
-    '输出 schema:',
-    '{"success":true,"reason":"简短说明","nextAction":""}',
-  ].join('\n')
-}
-
-function buildEvaluatorUserPrompt({ userGoal, currentResult }: EvaluateChatResultParams) {
-  return [
-    `userGoal:\n${userGoal}`,
-    `currentResult:\n${currentResult || '(empty)'}`,
-  ].join('\n\n')
-}
-
 function parseChatEvaluation(content: string): ChatEvaluation {
   return ChatEvaluationSchema.parse(JSON.parse(extractJsonObject(content)))
 }
@@ -82,16 +61,11 @@ export async function evaluateChatResult(params: EvaluateChatResultParams) {
   try {
     const completion = await llm.generate({
       model: params.model,
-      messages: [
-        {
-          role: 'system',
-          content: buildEvaluatorSystemPrompt(),
-        },
-        {
-          role: 'user',
-          content: buildEvaluatorUserPrompt(params),
-        },
-      ],
+      messages: buildPrompt({
+        role: 'evaluator',
+        userGoal: params.userGoal,
+        currentResult: params.currentResult || '(empty)',
+      }),
       temperature: 0.1,
     })
 

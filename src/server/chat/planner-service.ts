@@ -2,6 +2,7 @@ import type { AgentPlanTask } from '@/src/lib/agent-planning'
 import type { ChatWorkflowContext } from '@/src/lib/chat-workflow'
 import { parseAgentPlan } from '@/src/lib/agent-planning'
 import { llm } from '@/src/lib/llm'
+import { buildPrompt, buildPromptBlock } from '@/src/lib/prompt-builder'
 import { generateQianwenEmbedding } from '@/src/lib/qianwen'
 import { LocalVectorStore } from '@/src/lib/vector-store'
 import { CHAT_TOOLS, DEFAULT_RAG_TOP_K, EMPTY_USAGE } from './constants'
@@ -33,57 +34,23 @@ function formatToolCatalog() {
   }).join('\n')
 }
 
-function buildPlannerSystemPrompt() {
-  return [
-    '你是 AI Task Planner。',
-    '你的任务是根据用户问题生成最小可执行任务列表。',
-    'Rules:',
-    '1. 根据用户问题生成步骤。',
-    '2. 每步必须指定 tool。',
-    '3. 步骤顺序合理，依赖必须通过 dependsOn 明确声明。',
-    '4. 输出 JSON，不允许文本解释。',
-    '5. tool 只能是 RAG、LLM、TOOL。',
-    '6. TOOL.parameters.name 只能是 get_weather、get_time、calculate_expression。',
-    '7. 最后一步必须是 LLM，并且用于输出直接给用户的最终结果。',
-    '8. 尽量减少步骤，通常 2 到 5 步足够。',
-    '9. 遇到天气、时间、计算类问题优先使用 TOOL。',
-    '10. 遇到需要知识依据、文档、资料的问题时使用 RAG。',
-    '11. 遇到写作类任务时，可以先检索资料，再提炼要点，再产出内容。',
-    '12. parameters 必须可直接执行，禁止输出 TODO、占位符或“根据上下文自行决定”。',
-    '13. 如果提供了上一轮 Evaluator 反馈，你必须优先修正这些问题。',
-    '14. 如果提供了上一轮候选结果，你必须避免重复其中已经暴露的问题，必要时补充新的步骤。',
-    '',
-    '输出 schema:',
-    '{"tasks":[{"id":"step_id","title":"步骤标题","tool":"RAG|LLM|TOOL","dependsOn":["prev_step"],"parameters":{}}]}',
-    '',
-    'RAG parameters:',
-    '{"query":"检索词","topK":3}',
-    '',
-    'LLM parameters:',
-    '{"prompt":"当前步骤要执行的指令","systemPrompt":"可选的系统约束","temperature":0.2}',
-    '',
-    'TOOL parameters:',
-    '{"name":"get_weather|get_time|calculate_expression","arguments":{"key":"value"}}',
-  ].join('\n')
-}
-
-function buildPlannerUserPrompt(
+function buildPlannerMessages(
   context: ChatWorkflowContext,
   planningKnowledgePreview: string,
 ) {
-  const recentHistory = formatRecentHistory(context.history)
-
-  return [
-    `用户目标：${context.userMessage}`,
-    `当前轮次：第 ${context.iteration} / ${context.maxIterations} 轮`,
-    context.userContext ? `用户长期记忆：\n${context.userContext}` : '',
-    context.conversationSummary ? `历史摘要：\n${context.conversationSummary}` : '',
-    recentHistory ? `最近对话：\n${recentHistory}` : '',
-    planningKnowledgePreview ? `RAG 背景预览：\n${planningKnowledgePreview}` : '',
-    context.lastResult ? `上一轮候选结果：\n${context.lastResult}` : '',
-    context.feedback ? `上一轮失败原因与修正建议：\n${context.feedback}` : '',
-    `可用工具目录：\n${formatToolCatalog()}`,
-  ].filter(Boolean).join('\n\n')
+  return buildPrompt({
+    role: 'planner',
+    userMessage: context.userMessage,
+    iteration: context.iteration,
+    maxIterations: context.maxIterations,
+    memory: buildPromptBlock('用户长期记忆：', context.userContext),
+    conversationSummary: buildPromptBlock('历史摘要：', context.conversationSummary),
+    recentHistory: buildPromptBlock('最近对话：', formatRecentHistory(context.history)),
+    planningKnowledgePreview: buildPromptBlock('RAG 背景预览：', planningKnowledgePreview),
+    lastResult: buildPromptBlock('上一轮候选结果：', context.lastResult),
+    feedback: buildPromptBlock('上一轮失败原因与修正建议：', context.feedback),
+    tools: buildPromptBlock('可用工具目录：', formatToolCatalog()),
+  })
 }
 
 function buildGenericFinalPrompt() {
@@ -262,16 +229,7 @@ export async function planChatTasks(context: ChatWorkflowContext) {
 
     const completion = await llm.generate({
       model: context.model,
-      messages: [
-        {
-          role: 'system',
-          content: buildPlannerSystemPrompt(),
-        },
-        {
-          role: 'user',
-          content: buildPlannerUserPrompt(context, planningKnowledgePreview),
-        },
-      ],
+      messages: buildPlannerMessages(context, planningKnowledgePreview),
       temperature: 0.1,
     })
 

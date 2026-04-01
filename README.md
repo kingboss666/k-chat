@@ -9,6 +9,8 @@ K-Chat 是一个基于 Next.js 16、React 19、TypeScript 和通义千问（Qwen
 它当前已经覆盖了几类关键能力：
 
 - 聊天请求的流式收发
+- 集中式 Prompt Layer 与角色化提示词管理
+- 可复用 Agent Engine 抽象
 - 基于 Planner 的任务拆解
 - 基于 Executor 的分步执行
 - 基于 Evaluator 的结果验收和多轮修正
@@ -36,6 +38,8 @@ K-Chat 对这些问题的处理方式是：
 - 用 `Planner` 先把用户问题拆成最小可执行步骤
 - 用 `Executor` 顺序执行 `RAG`、`TOOL`、`LLM` 三类任务
 - 用 `Evaluator` 独立判断结果是否达标，不达标则进入下一轮
+- 用通用 `Agent` 引擎承载 `plan -> execute -> evaluate` 主循环，让 chat 只负责场景配置
+- 用统一 Prompt Layer 管理 `summary / rag / planner / executor / evaluator / memory` 等角色模板
 - 用摘要记忆和长期记忆补足上下文
 - 用本地向量库约束知识来源
 - 用前端推理面板、Token 面板和后端迭代日志提升可观测性
@@ -52,7 +56,7 @@ K-Chat 对这些问题的处理方式是：
 - 编排层：`src/server/chat/*`
   - 负责 Planner / Executor / Evaluator、工具路由、记忆写入、执行日志
 - 基础能力层：`src/lib/*`
-  - 负责 Qwen API 适配、记忆模型、向量存储、文档切块、工作流引擎、计划 schema
+  - 负责 Qwen API 适配、Prompt Layer、记忆模型、向量存储、文档切块、工作流引擎、计划 schema
 - 数据层：`memory/*`、`.memory/*`
   - 负责用户长期记忆、向量库、聊天迭代日志
 - 规范层：`openspec/*`
@@ -64,31 +68,56 @@ K-Chat 对这些问题的处理方式是：
 Browser UI
   -> /api/chat
     -> chat-orchestrator
-      -> 加载短期/摘要/长期记忆
-      -> Planner 生成任务列表
-      -> Executor 逐步执行
-        -> RAG 检索
-        -> 工具调用
-        -> LLM 生成
-      -> Evaluator 判断是否通过
-        -> 通过: 输出最终答案
-        -> 不通过: 带反馈进入下一轮
-      -> 持久化长期记忆和迭代日志
+      -> createChatAgent
+        -> Agent.run
+          -> 加载短期 / 摘要 / 长期记忆
+          -> Planner 生成任务列表
+          -> Executor 逐步执行
+            -> RAG 检索
+            -> 工具调用
+            -> LLM 生成
+          -> Evaluator 判断是否通过
+            -> 通过: 输出最终答案
+            -> 不通过: 带反馈进入下一轮
+          -> 持久化长期记忆和迭代日志
 ```
 
 ### 一次聊天请求的实际流程
 
 1. 前端把用户消息发送到 `/api/chat`。
 2. Route Handler 建立 `NDJSON` 流，把后端事件持续推给前端。
-3. `chat-orchestrator` 读取摘要记忆和长期记忆，必要时先更新摘要。
-4. `planner-service` 让模型生成结构化任务列表；如果解析失败，则走内置兜底计划。
-5. `executor-service` 逐步执行任务：
+3. `chat-orchestrator` 创建 chat 专用 agent，并启动通用 `Agent.run()` 主循环。
+4. `chat-agent` 读取摘要记忆和长期记忆，必要时先更新摘要。
+5. `planner-service` 让模型生成结构化任务列表；如果解析失败，则走内置兜底计划。
+6. `executor-service` 逐步执行任务：
    - `RAG`：查本地向量库
    - `TOOL`：执行天气、时间、计算工具
    - `LLM`：生成中间结果或最终结果
-6. `evaluator-service` 独立判断当前结果是否满足用户目标。
-7. 如果不满足，系统会把失败原因和修正建议喂回下一轮，最多迭代 `3` 轮。
-8. 请求结束后，系统会更新长期记忆并把本轮日志写入 `.memory/chat-iteration-logs/`。
+7. `evaluator-service` 独立判断当前结果是否满足用户目标。
+8. 如果不满足，系统会把失败原因和修正建议喂回下一轮，最多迭代 `3` 轮。
+9. 请求结束后，系统会更新长期记忆并把本轮日志写入 `.memory/chat-iteration-logs/`。
+
+### Prompt Layer
+
+项目现在把提示词管理收敛到 `src/lib/prompt-builder.ts`，而不是在各个 service 里维护写死字符串。
+
+典型用法：
+
+```ts
+const messages = buildPrompt({
+  role: 'writer',
+  input: '写一段产品介绍',
+  context,
+  memory,
+  tools,
+})
+```
+
+这个入口会返回 `LLMMessage[]`，支持：
+
+- 变量注入
+- 多模板角色
+- `system / user / tool` 多消息角色输出
 
 ## 当前能力边界
 
@@ -101,7 +130,9 @@ Browser UI
 - 推理过程展示
 - Token 消耗统计
 - Planner 驱动的任务编排
+- 可复用 Agent 引擎抽象
 - Evaluator 驱动的多轮修正
+- 集中式 Prompt Layer
 - 三类工具：天气、时间、数学计算
 - 文档入库接口 `/api/document/ingest`
 - 本地 JSON 向量库检索
@@ -151,6 +182,7 @@ src/
         useTokenUsage.ts          # Token 统计
   server/chat/
     chat-orchestrator.ts          # 一次聊天请求的总编排
+    chat-agent.ts                 # Chat 场景的 Agent 组装
     planner-service.ts            # Planner
     executor-service.ts           # Executor
     evaluator-service.ts          # Evaluator
@@ -161,7 +193,9 @@ src/
     llm/
       index.ts                    # 统一 LLM 入口与模型注册
       types.ts                    # Provider / 消息 / usage 通用类型
+    agent.ts                      # 通用 Agent 引擎
     qianwen.ts                    # Qwen provider 与 embedding 适配
+    prompt-builder.ts            # Prompt Layer、模板注册与变量注入
     agent-planning.ts             # 计划 schema 和解析
     workflow-engine.ts            # 通用工作流执行器
     memory.ts                     # 短期记忆和摘要记忆
